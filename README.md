@@ -1,0 +1,35 @@
+# dsh-web-relay
+
+让远程设备经过认证后直接使用服务器上的 `dsh web`：不需要 VPN，也不需要在客户端做端口转发。
+
+内网主机主动向一台公网中继（腾讯云 / 阿里云 VPS）拨出 SSH 反向转发，中继上用 Caddy 终止 TLS 并提供一层网关口令，DSH 侧保留权威绑定 Cookie。中继上不安装本项目的任何代码，只用到系统 `sshd` 与 Caddy。
+
+## 当前状态
+
+**设计阶段，尚无实现。** 本仓库现在只包含设计文档与中继侧配置模板：
+
+```
+docs/      设计文档（单一事实来源）
+deploy/    引导写入中继的配置模板
+```
+
+设计与代码落点都在 [docs/README.md](docs/README.md)：需求与约束、拓扑、首次使用流程、文档索引。实现阶段的验证计划在 [docs/roadmap.md](docs/roadmap.md)。
+
+## 安装
+
+插件以 npm 包形式装进某个 profile，不修改 DSH 源码：
+
+```
+dsh plugin --profile web add file:/path/to/dsh-web-relay
+dsh plugin --profile web remove dsh-web-relay
+```
+
+包结构与安装 / 卸载 / 升级的细节见 [docs/modules/plugin-bundle.md](docs/modules/plugin-bundle.md)。
+
+## 使用
+
+首次配置必须在**服务器本机**的 `http://127.0.0.1:<dshPort>` 页面上完成：DSH 对非 loopback 页面把设置持久化降级为内存，远程页面写不了设置。在 设置 ▸ 插件 ▸ Web Relay 填入中继地址、管理账号与网关口令，保存即触发自动引导；引导结束后用终端横幅里打印的稳定书签访问。完整流程见 [docs/README.md](docs/README.md)。
+
+## 许可
+
+未声明许可。仓库可以公开阅读，但未授予再分发或衍生使用的许可。

@@ -1,0 +1,7 @@
+# dsh-web-relay — 托管块起点，块外内容原样保留。
+# 占位符由插件在引导时替换：
+#   @@PUBLIC_KEY@@   内网主机的隧道公钥（`ssh-ed25519 AAAA... dsh-web-relay`）
+#   @@RELAY_PORT@@   `tunnel.relayPort`，默认 18080；必须与 ssh -R 参数和 Caddy 上游一致
+# BEGIN dsh-web-relay
+restrict,port-forwarding,permitlisten="127.0.0.1:@@RELAY_PORT@@" @@PUBLIC_KEY@@
+# END dsh-web-relay

@@ -1,0 +1,350 @@
+# 模块：中继主机
+
+职责：在中继主机上建立唯一的公网入口，并把流量交给隧道。中继上运行两个东西：系统自带的 `sshd` 与 Caddy。**不安装本项目的任何代码。**
+
+本文件描述中继的**目标状态**：插件在中继上写下的每一处内容、它的形状与理由。写入过程见 [bootstrap.md](bootstrap.md)，出问题时的手工步骤见 [operations.md](operations.md)。
+
+## 1. 插件在中继上留下的东西
+
+| 位置 | 形态 | 模板 |
+| --- | --- | --- |
+| 账号 `relay` | `useradd --create-home --shell /usr/sbin/nologin relay` | — |
+| `/home/relay/.ssh/authorized_keys` | 带标记的托管块，一行公钥 | `deploy/authorized_keys.snippet` |
+| `/etc/ssh/sshd_config.d/60-dsh-web-relay.conf` | 带标记的托管块（无该目录时写主配置的托管块） | `deploy/sshd_config.snippet` |
+| `/etc/caddy/Caddyfile` | 带标记的托管块，两个站点（权威站点 + Host 不匹配的兜底） | `deploy/Caddyfile.snippet` |
+| `/etc/fail2ban/jail.d/caddy-dsh-relay.conf` + `/etc/fail2ban/filter.d/caddy-dsh-relay.conf` | 8443 网关的爆破防护，参数由模板填入 | `deploy/fail2ban/` |
+| CA 私钥与根证书 | Caddy 自己在 `/var/lib/caddy/.local/share/caddy/pki/authorities/dsh-relay/` 下生成 | — |
+
+块外内容原样保留。插件只碰这五处，卸载后中继上不会剩别的：**没有** systemd 单元、**没有**插件代码、**没有**证书生成脚本、**没有**额外的对外服务。CA 与证书全部交给 Caddy 内置签发者（见第 3 节），所以中继上不需要 `openssl`，也不需要在两处同步证书文件。
+
+`deploy/fail2ban/` 里的 sshd jail **不由引导安装**（它的 `ignoreip` 依赖用户才知道的内网出口地址，写错会把隧道一起封掉）；它作为模板提供，需要时手工装，见第 5 节。
+
+托管块由同一段脚本模板写入：`awk` 过滤旧块得到临时文件，用引号定界的 heredoc 追加新块，`install` 到目标路径，写回后立刻读回比对。每一处都可重复写入，因此"重新引导"没有游标。
+
+## 2. SSH 侧
+
+### 账号
+
+用独立用户而不是 `root` 或管理账号：`authorized_keys` 的限制作用于**那把钥匙**，专用用户让"这把钥匙能做什么"与"我的管理钥匙"彻底分开。`--shell /usr/sbin/nologin` 让这个账号即使在别处拿到 shell 也执行不了命令。
+
+### `sshd_config` 片段
+
+`deploy/sshd_config.snippet`：
+
+```sshdconfig
+# dsh-web-relay — managed block; edits outside these markers are preserved.
+# BEGIN dsh-web-relay
+Match User relay
+    AllowTcpForwarding remote
+    PermitOpen none
+    GatewayPorts no
+    X11Forwarding no
+    AllowAgentForwarding no
+    PermitTunnel no
+    PermitTTY no
+    ForceCommand /usr/sbin/nologin
+# END dsh-web-relay
+```
+
+- `AllowTcpForwarding remote` 是关键：只允许 `-R`（远程转发），`-L` 与 `-D` 在这个用户上被拒绝。这把钥匙因此无法拿中继当跳板去连别的主机。
+- `PermitOpen none` 与上一行一起，把"能开的东西"收窄到只有一条反向转发。
+- `GatewayPorts no` 是 OpenSSH 的默认值，显式写出来作为约束：即使 `permitlisten` 允许通配绑定，转发端点也不会绑到公网接口。
+- 这个片段**只放 `Match User relay` 段落**，不写 `PasswordAuthentication no` 这类全局项。全局认证策略属于主机管理员的判断，插件改它就有把管理员锁在门外的风险；而 `Match User relay` 加上一行 `restrict` 的 `authorized_keys`，已经让 `relay` 账号在协议层面不可能用口令登录。
+
+校验顺序是硬的：先 `sshd -t`，通过才 `systemctl reload ssh`。`sshd -t` 不通过就不重载并回滚该文件——一台把自己锁在门外的中继比没配置好的中继糟得多。重载后再用 `sshd -T -C user=relay,host=relay,addr=127.0.0.1` 读生效值，确认 `gatewayports no`、`permitopen none` 与允许的转发方向都在。
+
+### `authorized_keys`
+
+`deploy/authorized_keys.snippet` 的块内容只有一行：
+
+```text
+# BEGIN dsh-web-relay
+restrict,port-forwarding,permitlisten="127.0.0.1:18080" ssh-ed25519 AAAA... dsh-web-relay
+# END dsh-web-relay
+```
+
+- `restrict` 一次关掉 pty、exec、agent 转发、X11 与全部端口转发。
+- `port-forwarding` 把端口转发能力还回来（实际只有 `-R` 可用，因为 `sshd_config` 里限定了 `remote`）。
+- `permitlisten="127.0.0.1:18080"` 把这把钥匙能监听的远端地址锁死为一个。这是整份配置里最有价值的一条限制：即便私钥泄漏，持钥者也只能在中继的 loopback 上开这一个端口，不能执行命令、不能连别的端口、不能绑到公网接口。
+
+端口必须与插件包内 `tunnel.relayPort`（默认 `18080`）和 Caddy 上游地址一致。三处不一致时表现为隧道"连上了但转发失败"：客户端退出并打印 `remote port forwarding failed for listen port 18080`。
+
+### 手工验证
+
+```
+# 内网主机
+ssh -N -R 127.0.0.1:18080:127.0.0.1:3080 \
+    -i "$DSH_HOME/dsh-web-relay/ssh/relay_ed25519" \
+    -o IdentitiesOnly=yes -o BatchMode=yes \
+    -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile="$DSH_HOME/dsh-web-relay/ssh/known_hosts" \
+    relay@<vps.host>
+
+# 另一个终端（中继主机）
+ss -ltnp | grep 18080        # 必须是 127.0.0.1:18080，不是 0.0.0.0:18080
+```
+
+第二条是必查项：看到 `0.0.0.0` 说明配置没生效，此时隧道端点直接暴露在公网且**没有 TLS**。
+
+## 3. Caddy 侧
+
+版本要求：Caddy ≥ 2.9（`basic_auth` 指令名；更早版本用 `basicauth`），实机验证用 v2.10.0。上游是明文 HTTP 时，Caddy 默认**原样透传包括 `Host` 在内的请求头**，只额外设置 `X-Forwarded-*`；"自动把 Host 改成上游地址"的行为只发生在 HTTPS 上游。
+
+### 两段式认证
+
+`basic_auth` 有一个需要本设计处理的边界：浏览器在 WebSocket 握手时**是否携带 HTTP Basic 凭据**。凭据由浏览器缓存在会话内，普通请求上必然携带，但握手请求由浏览器自行发起，这不是规范强制的行为，而 DSH 的 Web 界面依赖 `/api/remote.mux` 这个 WebSocket。
+
+因此站点块在 `basic_auth` 之后另行下发一个 `HttpOnly` 会话 Cookie，并把后续请求的判定改成"有会话 Cookie 或再次通过 Basic"：
+
+```caddyfile
+	@session header Cookie *relay_session=<会话密钥>*
+	handle @session {
+		reverse_proxy 127.0.0.1:18080
+	}
+
+	handle {
+		route {
+			basic_auth {
+				me <bcrypt 哈希>
+			}
+			header Set-Cookie "relay_session=<会话密钥>; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000"
+			reverse_proxy 127.0.0.1:18080
+		}
+	}
+```
+
+- **`route` 是必需的，不是风格选择。** Caddy 的指令执行顺序由内置指令表决定，不由书写顺序决定，而 `header` 在默认顺序里排在 `basic_auth` 之前。不套 `route` 时未认证的 401 响应也会带上 `Set-Cookie`，任何人访问一次域名就能领到会话密钥并凭它绕开口令。实测确认过这条绕过路径存在，套上 `route` 后 401 上不再有 `Set-Cookie`。详见 [security.md](../security.md)。
+- `header Cookie *relay_session=...*` 两侧的 `*` 是必要的：`Cookie` 是把多个 Cookie 拼在一起的单个头字段，不加 `*` 会按整串精确匹配，只要 DSH 自己的 Cookie 也在里面就匹配不上。实测：`Cookie: dsh-auth-…=…; relay_session=…; other=1` 能匹配。
+- 会话密钥是一个静态随机串，等价于"把口令物化成一个 Cookie"。它存在记录的 `gateway.sessionSecret` 里，重新引导时默认保持不变，避免无谓地让手机重新登录。轮换路径见 [operations.md](operations.md)。
+- 用 `SameSite=Lax` 而不是 `Strict`：DSH 自己的 Cookie 已经是 `Strict`，网关 Cookie 只需要在顶层导航时带上，`Lax` 足够且不会在从外部直接粘贴链接进入时缺失。
+- 这一层不替代 DSH 的 Cookie，只是让"WS 握手必须携带凭据"不依赖浏览器行为。DSH 的权威绑定 Cookie 仍是第二道门。实测：HTTP/1.1 的升级请求带 Basic 凭据或带会话 Cookie 都得到 `101`，不带凭据得到 `401`。
+
+`basic_auth` 的明文口令只在引导时存在：它经 stdin 交给 `caddy hash-password`，落进 Caddyfile 的只有 `$2a$14$…`。
+
+### 站点块
+
+`deploy/Caddyfile.snippet`。权威、端口、哈希与会话密钥是仅有的几个变量：
+
+```caddyfile
+# dsh-web-relay — managed block; keep other site blocks outside these markers.
+# BEGIN dsh-web-relay
+{
+	auto_https disable_redirects
+	pki {
+		ca dsh-relay {
+			name "DSH Web Relay"
+			intermediate_lifetime 8760h
+		}
+	}
+}
+
+:@@GATEWAY_PORT@@ {
+	respond "dsh-web-relay: Host 与权威不匹配" 421
+}
+
+@@AUTHORITY@@ {
+	tls {
+		issuer internal {
+			ca dsh-relay
+			lifetime 2160h
+		}
+	}
+
+	handle_errors {
+		@down `{err.status_code} == 502`
+		handle @down {
+			respond "dsh-web-relay: 无法连接内网主机（隧道未连接，或内网 dsh web 未响应）" 502
+		}
+	}
+
+	@session header Cookie *relay_session=@@SESSION_SECRET@@*
+	handle @session {
+		reverse_proxy 127.0.0.1:@@RELAY_PORT@@ {
+			stream_timeout 24h
+			stream_close_delay 5m
+		}
+	}
+
+	handle {
+		route {
+			basic_auth {
+				me @@BCRYPT_HASH@@
+			}
+			header Set-Cookie "relay_session=@@SESSION_SECRET@@; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000"
+			reverse_proxy 127.0.0.1:@@RELAY_PORT@@ {
+				stream_timeout 24h
+				stream_close_delay 5m
+			}
+		}
+	}
+
+	log {
+		output file /var/log/caddy/dsh-relay-access.log {
+			mode 0600
+		}
+		format filter {
+			wrap json
+			request>uri query {
+				replace key REDACTED
+				replace token REDACTED
+			}
+			request>headers>X-Forwarded-For delete
+		}
+	}
+}
+# END dsh-web-relay
+```
+
+要点逐条：
+
+- **不写 `header_up Host`。** 这是本设计的核心约束，默认的透传行为正是我们需要的：DSH 看到真实的公网权威，权威绑定 Cookie 与 Host/Origin 围栏才有意义。站点块里出现 `header_up Host` 就是把设计改回了被否定的方案。实测：上游看到的是 `host: <authority>`，不是 `127.0.0.1:<relayPort>`。见 [security.md](../security.md)。
+- **全局选项块只能有一个。** `auto_https disable_redirects` 与 `pki` 都是全局选项，Caddy 只允许一个全局选项块。用户在这台机器上已经有别的站点时，托管块里的全局块会与之冲突。引导因此在写入前检查 `auto_https` / `pki` 是否已被块外内容声明，命中就停下并说明原因，而不是写出一份 `caddy validate` 通不过的 Caddyfile。同样的检查也适用于 `:@@GATEWAY_PORT@@` 兜底站点：这台机器上已经有监听同一端口的站点时停下。
+- **`auto_https disable_redirects`**：站点地址是高位端口上的 IP 字面量，Caddy 的自动 HTTPS 会试图起一个 80 端口的跳转，与"不监听 80/443"冲突。只关掉跳转，不关 TLS。
+- **`tls { issuer internal { ca dsh-relay } }`**：用 `pki` 里定义的本地签发者，与其他内网站点隔离。根证书落在 `/var/lib/caddy/.local/share/caddy/pki/authorities/dsh-relay/root.crt`。
+- **`lifetime` 与 `intermediate_lifetime` 必须成对出现。** 叶子的有效期会被中间证书的上限截断：只写 `lifetime 2160h` 时实测叶子仍只有 **7 天**（Caddy 2.10 的中间证书默认有效期），加上 `intermediate_lifetime 8760h` 之后叶子才真的是 90 天。不设这一对时，未安装 CA 的客户端每 7 天要重新点一次证书警告。
+- **不写 `default_sni`。** 客户端连接 IP 字面量时不发 SNI，Caddy 按监听地址选站点；实测单站点场景下不发 SNI 也能正常握手并返回 200，多写一个 `default_sni` 只会引入一个需要与 `vps.host` 保持同步的冗余值。
+- **`request>uri query` 里两个都得打码。** `key` 是入口口令，`token` 是 DSH 的启动令牌——两者进了日志都等于泄漏。Caddy 默认把 `Cookie`、`Set-Cookie`、`Authorization` 记成 `REDACTED`，查询串不在默认范围内。实测：`/relay/enter?key=ABC&token=DEF` 记成 `key=REDACTED&token=REDACTED`。
+- **删除日志里的 `X-Forwarded-For`**：前面没有 CDN 时 Caddy 的 `remote_ip` 就是真实客户端 IP，XFF 只是冗余；删掉它让 fail2ban 的规则更简单（只看 `remote_ip`）。注意这只影响**日志字段**，`reverse_proxy` 仍然给上游写一个可信的 XFF，入口路由读到的左端值仍是真实对端。实测：客户端伪造 `X-Forwarded-For: 9.9.9.9` 时上游看到的是 `127.0.0.1`。
+- **`handle_errors` + `{err.status_code} == 502`，不是 `handle_response`。** 上游连不上时 Caddy 合成的 502 不经过 `handle_response`，走的是 `handle_errors`；写成 `handle_response @down status 502` 时实测返回的是 `content-length: 0` 的空 502。这段文本同时覆盖两种情形（隧道没连上、隧道通了但内网 `dsh web` 没响应），因此措辞不写死为"隧道未连接"。
+- **尾部那个 `:@@GATEWAY_PORT@@` 兜底站点是必要的。** 站点地址做主机匹配，Host 与权威不一致的请求不进入本站点。Caddy 对"监听地址上没有站点匹配"的请求返回 **200 空响应**——不是 403、不是 404，浏览器上是一片空白。这条空白页极难归因，因此显式给一个能读懂原因的答案。实测：`Host: evil.example` 时未加兜底站点得到 200 空响应，加上后得到 421 与提示文本；兜底站点不影响已声明站点的证书签发与握手。兜底站点不带 `log` 段，因此 421 请求不进访问日志：原因已经写在页面上，而把它记进日志只会让两个站点争用同一个日志文件。
+- **`stream_timeout 24h`**：给长连接一个上限，避免陈旧连接永久占用；客户端会在被切断后自动重连。
+- 写入后跑一次 `caddy fmt --overwrite`：不格式化时 `caddy validate` 每次都会打出 `Caddyfile input is not formatted` 警告，把真正的错误淹掉。
+
+### 内网证书的续签
+
+Caddy 的内网签发者自己负责续签，中继上不需要 cron 也不需要 `openssl`：根证书 10 年，中间证书 1 年，叶子 90 天。
+
+### 为什么没有明文站点
+
+不写 `http://` 站点块，不做 80→8443 跳转。IP 字面量下 HSTS 不可用（RFC 6797 排除 IP 字面量），明文入口只会引入"Cookie 在明文请求上发送"的风险——DSH 的 Cookie 没有 `Secure` 标记，因此"权威只以 HTTPS 提供服务"是硬约束。兜底站点只是 8443 上的另一个 HTTPS 站点，与明文入口无关。
+
+## 4. 网络与防火墙
+
+| 位置 | 规则 | 理由 |
+| --- | --- | --- |
+| 云安全组 | 入站 `tcp/8443` 对 `0.0.0.0/0` | 唯一公网入口 |
+| 云安全组 | 入站 `tcp/22` 只对管理来源与内网主机的公网出口 | 管理面不应全网开放 |
+| 云安全组 | 其余入站全部拒绝 | |
+| 主机防火墙 | 允许 8443、22（同上）；拒绝其余 | 防安全组之外的路径 |
+| `sshd` | 不监听额外端口 | 只用 22 |
+| Caddy | 只监听 8443 | 不做跳转 |
+
+**不要开放 18080。** 它只应在 loopback 上，由 `sshd` 绑定、由 Caddy 连接。检查方法见上面的 `ss -ltnp`。
+
+中继所在的云厂商安全组与主机防火墙都是**中继管理员**的职责，插件不改（改防火墙有把管理连接一起关掉的现实风险）。因此它是"必须成立的前置条件"之一，见 [security.md](../security.md)。
+
+## 5. 防爆破
+
+两个入口分开处理：SSH（管理面与隧道）与 Caddy（8443 的网关口令）。
+
+### SSH 侧
+
+先界定要防的是什么。隧道用公钥认证，`relay` 账号的 `authorized_keys` 带 `restrict`，**口令爆破在协议层面不可能成功**——没有口令可猜。剩下的三个真实目标是：全网扫描造成的日志与连接噪声、利用 sshd 自身漏洞的连接洪泛、以及最后一小节单说的"把自己封掉"。
+
+**第 0 层：让 22 不可达。** 云安全组把入站 `tcp/22` 收到管理来源与内网主机的公网出口 IP。隧道是内网主机主动外连的，所以白名单里必须有家里的出口地址；家里是动态 IP 或 CGNAT 时这条用不了，CGNAT 下按 IP 封还会误伤同地址的其他用户，只能依靠下面几层。
+
+**第 1 层：只认公钥。** 即第 2 节的 `Match User relay` 与 `restrict` 前缀。这一层决定爆破能否成功，其余各层只决定噪声大小。
+
+**第 2 层：sshd 自带的来源惩罚（OpenSSH ≥ 9.8）。** `PerSourcePenalties` 自 9.8 起默认开启：`authfail:5s`、`invaliduser:5s`、`noauth:1s`、`grace-exceeded:10s`、`crash:90s`，累计到 `min:15s` 才开始拒绝，单一来源最多累计到 `max:10m`；`PerSourceNetBlockSize` 默认 `32:128`，按单个地址计算。用 `ssh -V` 确认版本：Ubuntu 22.04（8.9p1）与 24.04（9.6p1）都**没有**这个功能。
+
+这里有一条与插件直接相关的相互作用：`authfail:5s` 配上 `min:15s` 意味着**连续三次认证失败就会触发拒绝**，而插件的重连退避序列从 1s 起。公钥配置错误（`authorized_keys` 权限不对、路径写错、`permitlisten` 端口与 `tunnel.relayPort` 不符）会让内网主机在十几秒内把自家出口 IP 送进惩罚名单，最长 10 分钟连不上，现象是"隧道连不上，手动 `ssh` 也连不上"。这是需要人工介入的故障，加大重试解决不了；出口 IP 固定时可用 `PerSourcePenaltyExemptList` 排除它，否则应当让它失败并告警。诊断入口见 [operations.md](operations.md)。
+
+**第 3 层：fail2ban 的 sshd jail（可选）。** 目标发行版没有内置惩罚时才需要补充。`deploy/fail2ban/jail.d/jail-sshd.local`：
+
+```ini
+[sshd]
+enabled  = true
+maxretry = 3
+findtime = 600
+bantime  = 3600
+ignoreip = 127.0.0.1/8 <管理来源> <内网主机的公网出口 IP>
+```
+
+模板里这两个地址写成 `@@ADMIN_SOURCES@@` 与 `@@HOME_EGRESS_IP@@`，由使用者自己填：插件不安装这个 jail，也不猜地址。
+
+发行版自带的 `filter.d/sshd.conf` 已覆盖需要匹配的日志行，不必自己写 filter。`ignoreip` 必须包含内网主机的出口地址与管理来源，否则会像上一段那样把隧道一起封掉。插件不自动改动防火墙与 fail2ban——`ignoreip` 依赖用户才知道的出口 IP。
+
+**第 4 层：收窄 sshd 自身的暴露面。** `MaxStartups 10:30:100`（默认）限制未认证并发；`LoginGraceTime` 从默认 120 降到 30；`MaxAuthTries` 从默认 6 降到 3。换非标准端口能挡掉绝大多数全网扫描，但那属于降噪而不是安全措施，只有与安全组白名单一起用才值得。
+
+**第 5 层：保持 openssh 有安全更新。** 这一条比前面几条加起来更重要：连接洪泛不只是噪声问题，2024 年的 regreSSHion（CVE-2024-6387）就是要在 8.5p1–9.7p1 上持续连接 6–8 小时才可能利用成功。限制连接频率直接压缩了这类攻击的可行性。
+
+### Caddy 侧（8443 网关）
+
+`basic_auth` 用 bcrypt 校验，单次尝试成本已很高，但没有内置锁定。用系统自带的 fail2ban 读 Caddy 的 JSON 访问日志，`deploy/fail2ban/` 下两个文件：
+
+```ini
+# filter.d/caddy-dsh-relay.conf
+[Definition]
+failregex = ^.*"logger":"http\.log".*"remote_ip":"<HOST>".*"status":401.*$
+ignoreregex =
+```
+
+```ini
+# jail.d/caddy-dsh-relay.conf
+[DEFAULTS]
+bantime.increment = true
+
+[caddy-dsh-relay]
+enabled  = true
+port     = 8443
+filter   = caddy-dsh-relay
+logpath  = /var/log/caddy/dsh-relay-access.log
+maxretry = 5
+findtime = 600
+bantime  = 3600
+```
+
+- 日志是 JSON 单行，`failregex` 按行匹配即可。`remote_ip` 在行里排在 `status` 之前，所以"取地址 + 判状态"可以写成一条正则，不需要 fail2ban 的 JSON 解析。实测这两个字段的顺序与上面一致，`Authorization` 头也已经被 Caddy 记成 `REDACTED`。
+- `port` 由引导按 `gateway.port` 替换；`logpath` 与 Caddyfile 的 `output file` 出自同一份模板，两者必须一致。
+- `bantime.increment` 值得开启：单用户场景下自己被封的概率很低，而攻击者会被指数推开。它是 `[DEFAULTS]` 段的设置，因此模板把它放在同一个文件里。
+- 规则同时捕获 Caddy 的 `basic_auth` 失败（401）与 DSH 自己返回的 401。后者通常意味着隧道通了但认证有问题，被一起封掉是可接受的副作用（并且它本身也可疑）。
+- Caddy 侧的 jail 由引导安装（第 7 步的一部分），因为它的 `logpath` 与 `port` 与 Caddyfile 出自同一份模板，手工同步容易错位。sshd 侧的 jail 不自动安装：它的 `ignoreip` 依赖用户才知道的内网出口地址，写错会连同隧道一起封掉，因此只作为模板提供。这两类文件的所有权约定（托管块、整文件标记）见 [deploy/README.md](../../deploy/README.md)。
+- fail2ban 的封禁动作默认走 iptables；中继上只有 `nft` 而没有 `iptables` 兼容层时，要在 `[DEFAULTS]` 里把 `banaction` 换成 `nftables-multiport`，否则 jail 会启动但一条规则都装不上。
+
+入口口令 `/relay/enter` 一旦泄漏，攻击者仍要过这一层，因此爆破在这一层就被挡住，不会打到内网主机。
+
+## 6. 明确禁止
+
+1. **不写 `header_up Host` / `header_up Origin`。** 见 [security.md](../security.md)。
+2. **不提供明文入口。** 不写 `http://` 站点块，不做 80→8443 跳转。
+3. **不把 18080 暴露到公网。** 隧道端点是明文 HTTP。
+4. **不关闭 `StrictHostKeyChecking`。** 内网侧固定为 `yes`；需要换主机密钥时更新 `known_hosts` 并记录指纹。
+5. **不在中继上放 DSH 凭据。** 中继只需要 SSH 公钥、TLS 私钥/证书、Caddyfile。
+6. **不配置 `trusted_proxies`。** 前面没有别的代理；配置它会引入 XFF 伪造面。
+7. **不把 CA 私钥复制出来。** 根证书只有公钥，可以公开分发；私钥留在 Caddy 的数据目录里。
+8. **不让插件改防火墙与全局 sshd 认证策略。** 这两处的错误会把管理员锁在门外。
+
+## 7. 部署后自检清单
+
+引导结束时这些都应成立；手工部署或排障时照抄。`<authority>` 是 `vps.host:gateway.port`，`<ca>` 是取回的根证书路径：
+
+```
+# 中继主机
+ss -ltnp | grep -E '18080|8443'         # 18080 必须是 127.0.0.1
+sshd -T -C user=relay,host=relay,addr=127.0.0.1 | grep -iE 'gatewayports|permitopen|allowtcpforwarding'
+
+# 未认证：期望 401，且响应里没有 set-cookie
+curl -sS --cacert <ca> -D- -o /dev/null https://<authority>/ | grep -iE '^HTTP|^set-cookie'
+
+# 认证成功：期望 200 或 502，且响应里有 relay_session
+curl -sS --cacert <ca> -u me:<pw> -D- -o /dev/null https://<authority>/ | grep -iE '^HTTP|^set-cookie'
+
+# 隧道未连接：期望 502 且带可读提示，不是空响应
+curl -sS --cacert <ca> -u me:<pw> https://<authority>/
+
+# 明文端口不可用
+curl -sS -o /dev/null -w '%{http_code}\n' --max-time 3 http://<authority>/
+```
+
+两条必查项：
+
+1. **未认证请求不得带 `set-cookie`。** 带上就说明 `handle` 段漏了 `route`，任何人都能领到会话密钥并绕开口令。这是整份清单里最容易在改动中被破坏、又最不显眼的一条。
+2. **认证成功后必须带 `relay_session`。** 缺它时 WebSocket 握手会失败，而普通请求看起来一切正常。
+
+另外核对一次证书链与有效期，确认 90 天的覆盖真的生效（少了 `intermediate_lifetime` 时这里会显示 7 天）：
+
+```
+openssl s_client -connect <authority> </dev/null 2>/dev/null | openssl x509 -noout -dates
+openssl x509 -in /var/lib/caddy/.local/share/caddy/pki/authorities/dsh-relay/intermediate.crt -noout -dates
+```
+

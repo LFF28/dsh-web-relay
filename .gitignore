@@ -1,0 +1,9 @@
+# 依赖与构建产物（实现阶段填进来）
+node_modules/
+lib/
+
+# 编辑器 / 笔记工具的状态
+.obsidian/
+
+# 本机草稿
+.DS_Store

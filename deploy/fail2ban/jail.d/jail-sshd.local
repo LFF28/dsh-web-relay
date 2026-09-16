@@ -1,0 +1,15 @@
+# dsh-web-relay — sshd jail（可选，插件不安装）。安装到 /etc/fail2ban/jail.d/。
+#
+# 只有当目标发行版的 OpenSSH 没有内置来源惩罚（PerSourcePenalties，9.8 起才有；
+# Ubuntu 22.04 与 24.04 都没有）时才需要它。
+#
+# ignoreip 必须包含内网主机的公网出口 IP 与管理来源：漏掉出口 IP 时，
+# 隧道自己的失败重连会被封掉，现象是"隧道连不上，手动 ssh 也连不上"。
+# 家里是动态 IP 或 CGNAT 时不要按 IP 封整个 sshd，宁可只用 fail2ban 记日志。
+
+[sshd]
+enabled  = true
+maxretry = 3
+findtime = 600
+bantime  = 3600
+ignoreip = 127.0.0.1/8 @@ADMIN_SOURCES@@ @@HOME_EGRESS_IP@@

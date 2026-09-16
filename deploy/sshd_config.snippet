@@ -1,0 +1,13 @@
+# dsh-web-relay — 托管块起点，块外内容原样保留。
+# 只放 Match User relay 段落：全局认证策略属于主机管理员，插件不碰。
+# BEGIN dsh-web-relay
+Match User relay
+    AllowTcpForwarding remote
+    PermitOpen none
+    GatewayPorts no
+    X11Forwarding no
+    AllowAgentForwarding no
+    PermitTunnel no
+    PermitTTY no
+    ForceCommand /usr/sbin/nologin
+# END dsh-web-relay

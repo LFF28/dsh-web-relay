@@ -1,0 +1,77 @@
+# dsh-web-relay — 托管块起点，块外内容原样保留。
+# 占位符由插件在引导时替换：
+#   @@AUTHORITY@@       `vps.host:gateway.port`，浏览器地址栏里逐字出现的权威
+#   @@GATEWAY_PORT@@    `gateway.port`，与上一行里的端口相同
+#   @@SESSION_SECRET@@  网关口令换来的会话密钥，来自记录的 `gateway.sessionSecret`
+#   @@BCRYPT_HASH@@     `caddy hash-password` 的输出，来自 `gateway.password`
+#   @@RELAY_PORT@@      `tunnel.relayPort`，默认 18080；必须与 ssh -R 参数一致
+# BEGIN dsh-web-relay
+{
+	auto_https disable_redirects
+	pki {
+		ca dsh-relay {
+			name "DSH Web Relay"
+			intermediate_lifetime 8760h
+		}
+	}
+}
+
+# Host 与权威不匹配的请求会落到这里。没有这个兜底站点时 Caddy 返回 200 空响应，
+# 浏览器上是一片无法归因的空白页。
+:@@GATEWAY_PORT@@ {
+	respond "dsh-web-relay: Host 与权威不匹配" 421
+}
+
+@@AUTHORITY@@ {
+	tls {
+		issuer internal {
+			ca dsh-relay
+			lifetime 2160h
+		}
+	}
+
+	handle_errors {
+		@down `{err.status_code} == 502`
+		handle @down {
+			respond "dsh-web-relay: 无法连接内网主机（隧道未连接，或内网 dsh web 未响应）" 502
+		}
+	}
+
+	@session header Cookie *relay_session=@@SESSION_SECRET@@*
+	handle @session {
+		reverse_proxy 127.0.0.1:@@RELAY_PORT@@ {
+			stream_timeout 24h
+			stream_close_delay 5m
+		}
+	}
+
+	handle {
+		# route 按书写顺序执行；没有它时 header 会排在 basic_auth 之前，
+		# 未认证的 401 响应也会带上 Set-Cookie，等于把会话密钥发给任何人。
+		route {
+			basic_auth {
+				me @@BCRYPT_HASH@@
+			}
+			header Set-Cookie "relay_session=@@SESSION_SECRET@@; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000"
+			reverse_proxy 127.0.0.1:@@RELAY_PORT@@ {
+				stream_timeout 24h
+				stream_close_delay 5m
+			}
+		}
+	}
+
+	log {
+		output file /var/log/caddy/dsh-relay-access.log {
+			mode 0600
+		}
+		format filter {
+			wrap json
+			request>uri query {
+				replace key REDACTED
+				replace token REDACTED
+			}
+			request>headers>X-Forwarded-For delete
+		}
+	}
+}
+# END dsh-web-relay
