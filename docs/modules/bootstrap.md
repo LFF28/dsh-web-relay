@@ -133,9 +133,9 @@ fail2ban 用发行版包（`apt-get install -y fail2ban`）即可，`deploy/fail
 
 `caddy hash-password` 从 stdin 读明文，输出 `$2a$14$…`。明文不写文件、不进 argv、不出现在 Caddyfile 里。**stdin 必须以换行结尾**：不带结尾换行时命令报 `Error: EOF` 且不输出哈希，配成空字符串会让 Caddyfile 校验失败在一个看不出原因的地方。
 
-站点内容由模板生成，权威、端口、端口哈希、会话密钥、`tunnel.relayPort` 是仅有的几个变量，完整文本见 [relay-host.md](relay-host.md)。写入按托管块进行，用户在这台机器上原有的其他站点行不受影响。
+站点内容由模板生成，权威、端口、端口哈希、会话密钥、`tunnel.relayPort` 是仅有的几个变量，完整文本见 [relay-host.md](relay-host.md)。写入按托管块进行，用户在这台机器上原有的其他站点行不受影响。模板里的上游片段带一行 `header_down Set-Cookie "$" "; Secure"`，它给 DSH 自己不下发 `Secure` 的 Cookie 补上这一位；这一行不能换成站点级 `header`，理由见 [relay-host.md](relay-host.md) 第 3 节。
 
-写入前先检查块外是否已经存在全局选项块（`auto_https`、`pki`、`default_sni` 中的任意一项）。Caddy 只允许一个全局选项块，用户已经有一个时托管块必然冲突；这种情况下停下并把检测到的那一行作为 `detail` 报出来，让用户自己去合并，插件不擅自改写别人的全局配置。
+写入前先检查块外是否已经存在全局选项块（`auto_https`、`pki`、`default_sni` 中的任意一项）。Caddy 只允许一个全局选项块，用户已经有一个时托管块必然冲突；这种情况下停下并把检测到的那一行作为 `detail` 报出来，让用户自己去合并，插件不擅自改写别人的全局配置。具名片段 `(dsh-relay-upstream)` 的名字在整个文件里也必须唯一，以及块外已经存在监听 `gateway.port` 的站点时，都按同样的方式停下。
 
 写完后先 `caddy fmt --overwrite`，再校验：`caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile`。校验要在 `caddy` 账号的环境里跑（`XDG_DATA_HOME=/var/lib/caddy/.local/share`、`XDG_CONFIG_HOME=/var/lib/caddy/.config`），否则本地 CA 的数据目录解析不到，校验会报出一个与配置无关的错。校验通过才 `systemctl reload caddy`；reload 是优雅的，失败时旧配置继续服务。
 

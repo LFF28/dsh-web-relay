@@ -24,7 +24,7 @@
  └───────────────────────────────────────────────────────────┘
 ```
 
-② 的 Host 必须原样透传：Caddy 一旦 `header_up Host` 改写成 loopback，DSH 的权威围栏就会把"声明式信任"变成"伪造 loopback 信任"，见 [modules/trust.md](modules/trust.md)。
+② 的 Host 必须原样透传：Caddy 一旦 `header_up Host` 改写成 loopback，DSH 的权威围栏就会把"声明式信任"变成"伪造 loopback 信任"，见 [modules/trust.md](modules/trust.md)。Caddy 只改响应里的一处：给上游的每个 `Set-Cookie` 补上 `Secure`（DSH 自己不下发这一位），见 [modules/relay-host.md](modules/relay-host.md)。
 
 ③ 是中继上唯一监听 `18080` 的东西：`GatewayPorts no` 加上 `permitlisten="127.0.0.1:18080"` 让它只出现在 loopback，能连它的只有同机 Caddy，见 [modules/relay-host.md](modules/relay-host.md)。
 
@@ -103,6 +103,8 @@ Client 半边（`lib/client.js`）只做一件事：向 `settings.plugin.item` �
 
 - DSH 永远只监听 `127.0.0.1`；内网主机永远不监听公网。
 - Caddy 永远不改写 Host / Origin / Referer。
+- 中继上只有一个 HTTP 端口（`gateway.port`），且只有 loopback 上的 `18080` 作为它的上游。
+- 每个经过中继的 `Set-Cookie` 都带 `Secure`；DSH 自己不下发这一位，由上游定义里的 `header_down` 补上。
 - 中继上的反向转发端点永远只在 loopback。
 - 浏览器只与中继说话，永不直连内网主机。
 - 插件在中继上留下的每样东西都在 `/etc/dsh-web-relay` 与 `/etc/caddy/Caddyfile` 的两个带标记的托管块里，卸载路径见 [modules/operations.md](modules/operations.md)。

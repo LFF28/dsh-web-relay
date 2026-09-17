@@ -10,7 +10,8 @@
 | 口令爆破 | 对 Caddy 的口令校验反复尝试 | bcrypt 校验成本 + 中继侧 fail2ban 封 IP，见 [modules/relay-host.md](modules/relay-host.md) |
 | 中间人 | 链路被旁听或篡改 | TLS；内网到中继的 SSH 固定主机密钥 |
 | 书签泄漏 | 收藏的 `/relay/enter?key=…` 落到他人手里 | 该 URL 单独无效，仍需网关口令，见 [modules/entry.md](modules/entry.md) |
-| Cookie 失窃 | 浏览器侧 Cookie 被读走 | `HttpOnly`（脚本读不到）+ `SameSite=Strict`（跨站不发）+ 权威绑定（换权威即失效） |
+| Cookie 失窃 | 浏览器侧 Cookie 被读走 | `HttpOnly`（脚本读不到）+ `SameSite=Strict`（跨站不发）+ `Secure`（明文不发，由中继补上）+ 权威绑定（换权威即失效） |
+| 同主机其他端口的服务 | 中继上还跑了别的 HTTP 服务，读到或写入同一个 Cookie | 中继只开 `gateway.port` 一个 HTTP 端口；Cookie 不按端口隔离（RFC 6265 第 8.5 节），所以唯一可靠的对策是"没有第二个端口" |
 | 中继主机被入侵 | VPS 被攻破 | 中继上没有任何 DSH 凭据，但隧道上的明文流量可被读到——这是本架构的固有代价，见下文 |
 | 伪造 Host 打本机 | 本机上的恶意页面用 DNS rebinding 打 `127.0.0.1:3080` | DSH 既有围栏；本设计只增加一个必需权威，不扩大到通配 |
 | 局域网直连 | 同网段设备直连 DSH | DSH 仍只听 `127.0.0.1`；插件从不请求 `0.0.0.0` |
@@ -37,7 +38,9 @@
 
 **为什么第二层是必需的，而不是可选加固。** DSH 自身的认证是单操作者的：一个启动令牌、一个长期 Cookie，没有多用户、没有吊销列表、没有频率限制。把它直接挂到公网等于把一个 RCE 级界面挂到公网。
 
-**Cookie 没有 `Secure` 标记这件事要单独说明。** DSH 下发的是 `Max-Age; Path=/; Expires; HttpOnly; SameSite=Strict`，没有 `Secure`。如果同一个权威也能用明文访问，Cookie 就会在明文请求上发送。因此"权威只以 HTTPS 提供服务"是硬约束：插件只接受 `https` 权威，Caddy 站点地址不写 `http://`，中继上不监听明文端口，也不监听 80/443。
+**DSH 自己不给 Cookie 加 `Secure`，由中继补上。** DSH 下发的是 `Max-Age; Path=/; Expires; HttpOnly; SameSite=Strict`，没有 `Secure`。缺了这一位，同一个权威上的任何一次明文请求都会把 Cookie 送出去，RFC 6265 第 8.3 节对这种情况的结论是"安全信道提供的保护基本是空的"。插件不修改 DSH 源码，所以补这一位发生在上游定义里的 `header_down Set-Cookie "$" "; Secure"`：它把每个 `Set-Cookie` 的值整体匹配并在末尾追加，与 Cookie 怎么写无关。站点级的 `header` 指令做不到同一件事（实测匹配操作数不吃子串），改动那一块时要连带重跑 [modules/relay-host.md](modules/relay-host.md) 第 7 节的 `Secure` 自检。
+
+**中继上只有一个 HTTP 端口，这是 Cookie 的要求而不只是收缩攻击面。** RFC 6265 第 8.5 节的结论是 Cookie 不提供端口隔离：同一台主机上另一个端口上的服务既读得到也写得到同一个 Cookie。DSH 的 Cookie 名只由权威的 host 决定，所以中继上多开一个能吃 Cookie 的端口就等于多一条绕开第四层的路。因此"权威只以 HTTPS 提供服务"加上"中继上不存在第二个 HTTP 服务端口"是同一件事的两半，插件在这两条上都不提供配置项。
 
 IP 字面量权威无法使用 HSTS（RFC 6797 明确排除 IP 字面量），所以无域名方案里没有"靠浏览器强制升级"这条退路。
 
@@ -137,10 +140,10 @@ DSH 的客户端在非 loopback 页面上把设置持久化降级为内存（`pe
 
 部署完成后下面每一条都要成立；任何一条不成立，安全性就低于本设计的假设。
 
-1. 中继上只跑 `sshd` 与 Caddy，没有第三个对外服务。
+1. 中继上只跑 `sshd` 与 Caddy，没有第三个对外服务，也没有第二个 HTTP 端口（`ss -ltnp` 逐个核对）。
 2. 中继的安全组只开放 `gateway.port`（以及你自己管理用的 SSH 来源）。
 3. TLS 证书被客户端真实校验，而不是"永久忽略证书错误"。
-4. 权威只以 HTTPS 提供服务，不存在明文入口。
+4. 认证成功响应里的每一条 `set-cookie` 都带 `Secure`，认证失败的响应里没有 `set-cookie`。
 5. `authorized_keys` 上用于隧道的公钥带 `restrict,port-forwarding,permitlisten`，端口与 `tunnel.relayPort` 一致。
 6. `sshd` 的 `GatewayPorts` 为 `no`，转发端点不绑到公网接口。
 7. `publicAuthority`、Caddy 站点地址、DSH 围栏的受信项三者一致。

@@ -16,6 +16,18 @@
 	}
 }
 
+# 上游只有一个，两个分支共用这一份定义：会话 Cookie 分支与口令分支必须给出
+# 完全相同的响应，分开写时容易只改一处。
+(dsh-relay-upstream) {
+	reverse_proxy 127.0.0.1:@@RELAY_PORT@@ {
+		# DSH 自己不给 Cookie 加 Secure，由中继补上。
+		# 按整个值匹配再追加，与 Cookie 的属性写法无关。
+		header_down Set-Cookie "$" "; Secure"
+		stream_timeout 24h
+		stream_close_delay 5m
+	}
+}
+
 # Host 与权威不匹配的请求会落到这里。没有这个兜底站点时 Caddy 返回 200 空响应，
 # 浏览器上是一片无法归因的空白页。
 :@@GATEWAY_PORT@@ {
@@ -39,10 +51,7 @@
 
 	@session header Cookie *relay_session=@@SESSION_SECRET@@*
 	handle @session {
-		reverse_proxy 127.0.0.1:@@RELAY_PORT@@ {
-			stream_timeout 24h
-			stream_close_delay 5m
-		}
+		import dsh-relay-upstream
 	}
 
 	handle {
@@ -53,10 +62,7 @@
 				me @@BCRYPT_HASH@@
 			}
 			header Set-Cookie "relay_session=@@SESSION_SECRET@@; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000"
-			reverse_proxy 127.0.0.1:@@RELAY_PORT@@ {
-				stream_timeout 24h
-				stream_close_delay 5m
-			}
+			import dsh-relay-upstream
 		}
 	}
 

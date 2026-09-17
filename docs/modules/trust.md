@@ -68,6 +68,7 @@ publicAuthority = canonicalAuthority(vps.host) + ':' + gateway.port
 - 探测 ① 只测"围栏是否接受这个 Host"，因此它命中 `/api/` 下的任一路径即可；不带 Cookie 时正确的期望是 **401**（不是 403）。**403 就是权威没生效的确定信号**。这一条是本模块最有价值的断言：它把一个模糊的"手机打不开"变成了明确的分类。
 - 探测 ① 直接连 `127.0.0.1:<dshPort>`，不过隧道，因此它能把"权威没生效"与"隧道没通"分开——这是两个位置完全不同的故障。
 - 探测 ② 会真的走公网。它验证 TLS 证书链、Caddy 是否在跑、安全组是否开放、以及隧道是否真的把流量送到了。默认开启，可用 `selfCheck.publicProbe: false` 关掉（例如内网主机不能直连公网时）。
+- 探测 ② 看不到 DSH 自己下发的 Cookie：那需要走完 `/relay/enter` 的令牌流程，插件不在自检里模拟一次登录。因此"认证成功响应里的每条 `set-cookie` 都带 `Secure`"由 [relay-host.md](relay-host.md) 第 7 节的清单用一次带凭据的请求核对。
 - 自检发生在引导之后，**失败不阻止 profile 启动**。远程访问是附加能力，让本地 `dsh web` 因为公网链路问题起不来是不可接受的。失败只写日志与记录的 `lastError`。
 
 ### 失败信息里给什么
@@ -79,7 +80,7 @@ publicAuthority = canonicalAuthority(vps.host) + ':' + gateway.port
 | 探测 ① 返回 403 | 权威没进 `trustedHosts` | 打印 `webRelay.authority()` 与 `connection` 行实际解析出的 `trustedHosts`，指出差异 |
 | 探测 ① 连接被拒 | 隧道没通或端口不对 | 打印隧道 `status()` 与 `ctx.webServer.port` / `ctx.webServer.host` 的实际值 |
 | 探测 ② TLS 证书校验失败 | 客户端不信任中继 CA | 输出根证书指纹与 [entry.md](entry.md) 的下载地址 |
-| 探测 ② 401 但浏览器仍打不开 | 浏览器侧 Cookie 或网关口令 | 指向 [security.md](../security.md) 的"必备条件" |
+| 探测 ② 401 但浏览器仍打不开 | 浏览器侧 Cookie 或网关口令 | 指向 [security.md](../security.md) 的"必须成立的前置条件" |
 | 探测 ② 超时 | 安全组 / Caddy 未监听 / 端口不通 | 指向 [relay-host.md](relay-host.md) 的防火墙清单 |
 
 ### 顺带检出的部署问题

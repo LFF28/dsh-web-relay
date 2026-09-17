@@ -38,7 +38,7 @@
 | `vps.identityFile` | `string?` | 空 | 管理账号私钥路径。留空则用系统身份解析（`~/.ssh/config`、默认私钥、`SSH_AUTH_SOCK`） |
 | `vps.password` | `secret?` | 空 | 管理账号口令。仅用于两处：`sudo -S` 提权；以及管理账号只能用口令登录时作为 SSH 口令（经 `SSH_ASKPASS` 助手提供，不落命令行） |
 | `vps.hostKeyFingerprint` | `string?` | 空 | 期望的中继主机公钥指纹，`SHA256:…` 形式。留空时首次连接按 TOFU 记录并打印指纹 |
-| `gateway.port` | `number` | `8443` | 公网入口 HTTPS 端口。权威即 `<vps.host>:<gateway.port>` |
+| `gateway.port` | `number` | `8443` | 公网入口 HTTPS 端口，也是中继上唯一的 HTTP 端口。权威即 `<vps.host>:<gateway.port>` |
 | `gateway.password` | `secret?` | 空 | Caddy 网关口令，用户自选。插件只把它交给 `caddy hash-password`，明文不落中继的磁盘 |
 | `tunnel.autoStart` | `boolean` | `true` | 参数齐全时是否自动拉起隧道 |
 | `bootstrapRequest` | `number` | `0` | 递增即触发一次完整重新引导；保存表单会自动递增 |

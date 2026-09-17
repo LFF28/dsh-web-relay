@@ -11,7 +11,7 @@
 | 账号 `relay` | `useradd --create-home --shell /usr/sbin/nologin relay` | — |
 | `/home/relay/.ssh/authorized_keys` | 带标记的托管块，一行公钥 | `deploy/authorized_keys.snippet` |
 | `/etc/ssh/sshd_config.d/60-dsh-web-relay.conf` | 带标记的托管块（无该目录时写主配置的托管块） | `deploy/sshd_config.snippet` |
-| `/etc/caddy/Caddyfile` | 带标记的托管块，两个站点（权威站点 + Host 不匹配的兜底） | `deploy/Caddyfile.snippet` |
+| `/etc/caddy/Caddyfile` | 带标记的托管块，一份具名上游片段（`dsh-relay-upstream`）加两个站点（权威站点 + Host 不匹配的兜底） | `deploy/Caddyfile.snippet` |
 | `/etc/fail2ban/jail.d/caddy-dsh-relay.conf` + `/etc/fail2ban/filter.d/caddy-dsh-relay.conf` | 8443 网关的爆破防护，参数由模板填入 | `deploy/fail2ban/` |
 | CA 私钥与根证书 | Caddy 自己在 `/var/lib/caddy/.local/share/caddy/pki/authorities/dsh-relay/` 下生成 | — |
 
@@ -99,7 +99,7 @@ ss -ltnp | grep 18080        # 必须是 127.0.0.1:18080，不是 0.0.0.0:18080
 ```caddyfile
 	@session header Cookie *relay_session=<会话密钥>*
 	handle @session {
-		reverse_proxy 127.0.0.1:18080
+		import dsh-relay-upstream
 	}
 
 	handle {
@@ -108,7 +108,7 @@ ss -ltnp | grep 18080        # 必须是 127.0.0.1:18080，不是 0.0.0.0:18080
 				me <bcrypt 哈希>
 			}
 			header Set-Cookie "relay_session=<会话密钥>; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000"
-			reverse_proxy 127.0.0.1:18080
+			import dsh-relay-upstream
 		}
 	}
 ```
@@ -138,6 +138,14 @@ ss -ltnp | grep 18080        # 必须是 127.0.0.1:18080，不是 0.0.0.0:18080
 	}
 }
 
+(dsh-relay-upstream) {
+	reverse_proxy 127.0.0.1:@@RELAY_PORT@@ {
+		header_down Set-Cookie "$" "; Secure"
+		stream_timeout 24h
+		stream_close_delay 5m
+	}
+}
+
 :@@GATEWAY_PORT@@ {
 	respond "dsh-web-relay: Host 与权威不匹配" 421
 }
@@ -159,10 +167,7 @@ ss -ltnp | grep 18080        # 必须是 127.0.0.1:18080，不是 0.0.0.0:18080
 
 	@session header Cookie *relay_session=@@SESSION_SECRET@@*
 	handle @session {
-		reverse_proxy 127.0.0.1:@@RELAY_PORT@@ {
-			stream_timeout 24h
-			stream_close_delay 5m
-		}
+		import dsh-relay-upstream
 	}
 
 	handle {
@@ -171,10 +176,7 @@ ss -ltnp | grep 18080        # 必须是 127.0.0.1:18080，不是 0.0.0.0:18080
 				me @@BCRYPT_HASH@@
 			}
 			header Set-Cookie "relay_session=@@SESSION_SECRET@@; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000"
-			reverse_proxy 127.0.0.1:@@RELAY_PORT@@ {
-				stream_timeout 24h
-				stream_close_delay 5m
-			}
+			import dsh-relay-upstream
 		}
 	}
 
@@ -198,7 +200,7 @@ ss -ltnp | grep 18080        # 必须是 127.0.0.1:18080，不是 0.0.0.0:18080
 要点逐条：
 
 - **不写 `header_up Host`。** 这是本设计的核心约束，默认的透传行为正是我们需要的：DSH 看到真实的公网权威，权威绑定 Cookie 与 Host/Origin 围栏才有意义。站点块里出现 `header_up Host` 就是把设计改回了被否定的方案。实测：上游看到的是 `host: <authority>`，不是 `127.0.0.1:<relayPort>`。见 [security.md](../security.md)。
-- **全局选项块只能有一个。** `auto_https disable_redirects` 与 `pki` 都是全局选项，Caddy 只允许一个全局选项块。用户在这台机器上已经有别的站点时，托管块里的全局块会与之冲突。引导因此在写入前检查 `auto_https` / `pki` 是否已被块外内容声明，命中就停下并说明原因，而不是写出一份 `caddy validate` 通不过的 Caddyfile。同样的检查也适用于 `:@@GATEWAY_PORT@@` 兜底站点：这台机器上已经有监听同一端口的站点时停下。
+- **全局选项块只能有一个。** `auto_https disable_redirects` 与 `pki` 都是全局选项，Caddy 只允许一个全局选项块。用户在这台机器上已经有别的站点时，托管块里的全局块会与之冲突。引导因此在写入前检查 `auto_https` / `pki` 是否已被块外内容声明，命中就停下并说明原因，而不是写出一份 `caddy validate` 通不过的 Caddyfile。同样的检查也适用于 `:@@GATEWAY_PORT@@` 兜底站点：这台机器上已经有监听同一端口的站点时停下。具名片段 `(dsh-relay-upstream)` 的名字在整个 Caddyfile 里也必须唯一，写入前一并检查。
 - **`auto_https disable_redirects`**：站点地址是高位端口上的 IP 字面量，Caddy 的自动 HTTPS 会试图起一个 80 端口的跳转，与"不监听 80/443"冲突。只关掉跳转，不关 TLS。
 - **`tls { issuer internal { ca dsh-relay } }`**：用 `pki` 里定义的本地签发者，与其他内网站点隔离。根证书落在 `/var/lib/caddy/.local/share/caddy/pki/authorities/dsh-relay/root.crt`。
 - **`lifetime` 与 `intermediate_lifetime` 必须成对出现。** 叶子的有效期会被中间证书的上限截断：只写 `lifetime 2160h` 时实测叶子仍只有 **7 天**（Caddy 2.10 的中间证书默认有效期），加上 `intermediate_lifetime 8760h` 之后叶子才真的是 90 天。不设这一对时，未安装 CA 的客户端每 7 天要重新点一次证书警告。
@@ -208,15 +210,31 @@ ss -ltnp | grep 18080        # 必须是 127.0.0.1:18080，不是 0.0.0.0:18080
 - **`handle_errors` + `{err.status_code} == 502`，不是 `handle_response`。** 上游连不上时 Caddy 合成的 502 不经过 `handle_response`，走的是 `handle_errors`；写成 `handle_response @down status 502` 时实测返回的是 `content-length: 0` 的空 502。这段文本同时覆盖两种情形（隧道没连上、隧道通了但内网 `dsh web` 没响应），因此措辞不写死为"隧道未连接"。
 - **尾部那个 `:@@GATEWAY_PORT@@` 兜底站点是必要的。** 站点地址做主机匹配，Host 与权威不一致的请求不进入本站点。Caddy 对"监听地址上没有站点匹配"的请求返回 **200 空响应**——不是 403、不是 404，浏览器上是一片空白。这条空白页极难归因，因此显式给一个能读懂原因的答案。实测：`Host: evil.example` 时未加兜底站点得到 200 空响应，加上后得到 421 与提示文本；兜底站点不影响已声明站点的证书签发与握手。兜底站点不带 `log` 段，因此 421 请求不进访问日志：原因已经写在页面上，而把它记进日志只会让两个站点争用同一个日志文件。
 - **`stream_timeout 24h`**：给长连接一个上限，避免陈旧连接永久占用；客户端会在被切断后自动重连。
+- **上游写成一个具名片段 `(dsh-relay-upstream)`，两个分支各 `import` 一次。** 两个分支必须给出完全相同的响应，重复一份 `reverse_proxy` 时最容易在改动里只动一处；`caddy validate` 对这两条路径不做交叉检查。
+- **`header_down Set-Cookie "$" "; Secure"` 是补 `Secure` 的唯一可行写法**，站点级 `header` 做不到；理由与实测结论见上一节。
 - 写入后跑一次 `caddy fmt --overwrite`：不格式化时 `caddy validate` 每次都会打出 `Caddyfile input is not formatted` 警告，把真正的错误淹掉。
 
 ### 内网证书的续签
 
 Caddy 的内网签发者自己负责续签，中继上不需要 cron 也不需要 `openssl`：根证书 10 年，中间证书 1 年，叶子 90 天。
 
-### 为什么没有明文站点
+### Cookie 的 `Secure` 由中继补上
 
-不写 `http://` 站点块，不做 80→8443 跳转。IP 字面量下 HSTS 不可用（RFC 6797 排除 IP 字面量），明文入口只会引入"Cookie 在明文请求上发送"的风险——DSH 的 Cookie 没有 `Secure` 标记，因此"权威只以 HTTPS 提供服务"是硬约束。兜底站点只是 8443 上的另一个 HTTPS 站点，与明文入口无关。
+DSH 自己下发的浏览器 Cookie 是 `Max-Age; Path=/; Expires; HttpOnly; SameSite=Strict`，**没有 `Secure`**。插件不修改 DSH 源码，因此补这一位只能在中继上做。
+
+RFC 6265 第 8.3 节把这件事说得很直白：走安全信道时服务器应当给每个 Cookie 加 `Secure`，否则"安全信道提供的保护基本是空的"。上游定义里的 `header_down Set-Cookie "$" "; Secure"` 因此把每个 `Set-Cookie` 的值整体匹配（正则 `$` 命中任意值）并在末尾追加 `; Secure`。按整个值匹配是为了与 Cookie 怎么写无关：DSH 以后调整属性顺序、或加一条新的 Cookie，都不需要改这份模板。
+
+这里有一处 Caddy 的坑值得记下：**站点级的 `header` 指令做不到这件事**。`header Set-Cookie <匹配> <替换>` 的匹配操作数不吃子串——实测写成 `header Set-Cookie "…SameSite=Strict" "…SameSite=Strict; Secure"` 时上游那条 Cookie 原样穿过、没有 `Secure`，而 `header { Set-Cookie { replace … } }` 会被适配成一段无意义的 JSON。能生效的是 `reverse_proxy` 内的 `header_down`。实测：上游同时给出 `relay_session`（本来就带 `Secure`）与 DSH 的 `dsh-auth-…`（不带）时，只有后者被追加，且没有出现重复的 `Secure`。
+
+两个分支——会话 Cookie 直通与口令分支——共用同一份上游定义 `(dsh-relay-upstream)`，就是为了让这条改写只有一处，不会只改一边。
+
+### 只有一个 HTTP 入口
+
+中继上对外只有 `gateway.port` 一个 HTTP 服务端口（另有管理用的 `sshd`，它不解析 Cookie）。除了缩小攻击面，这里还有一条 Cookie 层面的理由：RFC 6265 第 8.5 节说明**Cookie 不按端口隔离**，同一台主机另一个端口上的服务既读得到也写得到同一个 Cookie。DSH 的 Cookie 名只由权威的 host 决定、不带端口信息，所以中继上只要多开一个能吃 Cookie 的服务端口——明文 HTTP 的，或另一个 HTTPS 站点——它就可能拿到一个能通过第四层校验的会话 Cookie。封掉这条路只能靠"不存在第二个端口"，这一条不设配置项。
+
+因此不写 `http://` 站点块，不做 80→8443 跳转，也不为任何别的用途在中继上新增监听。IP 字面量下 HSTS 不可用（RFC 6797 排除 IP 字面量），明文入口没有浏览器侧的兜底：DSH 的 Cookie 虽然现在带上了 `Secure`，但那是中继补的，而明文端口上的服务根本不经过 Caddy，也就绕过了这次改写。
+
+兜底站点是同一个 Caddy 实例里 `8443` 上的另一个站点，不新增监听端口；`127.0.0.1:@@RELAY_PORT@@` 上的隧道端点只绑在 loopback，不对外。
 
 ## 4. 网络与防火墙
 
@@ -227,9 +245,11 @@ Caddy 的内网签发者自己负责续签，中继上不需要 cron 也不需�
 | 云安全组 | 其余入站全部拒绝 | |
 | 主机防火墙 | 允许 8443、22（同上）；拒绝其余 | 防安全组之外的路径 |
 | `sshd` | 不监听额外端口 | 只用 22 |
-| Caddy | 只监听 8443 | 不做跳转 |
+| Caddy | 只监听 8443 | 不做跳转，不加第二个站点 |
 
 **不要开放 18080。** 它只应在 loopback 上，由 `sshd` 绑定、由 Caddy 连接。检查方法见上面的 `ss -ltnp`。
+
+**对外只应有一个 HTTP 端口。** `ss -ltnp` 里除 `gateway.port` 与 `sshd` 之外的任何监听都要问清来路：多一个能吃 Cookie 的端口就多一条绕开第四层的路，理由见第 3 节的"只有一个 HTTP 入口"。插件只在 Caddyfile 里写两个站点，两者共用 `gateway.port`。
 
 中继所在的云厂商安全组与主机防火墙都是**中继管理员**的职责，插件不改（改防火墙有把管理连接一起关掉的现实风险）。因此它是"必须成立的前置条件"之一，见 [security.md](../security.md)。
 
@@ -306,7 +326,7 @@ bantime  = 3600
 ## 6. 明确禁止
 
 1. **不写 `header_up Host` / `header_up Origin`。** 见 [security.md](../security.md)。
-2. **不提供明文入口。** 不写 `http://` 站点块，不做 80→8443 跳转。
+2. **不提供明文入口，也不新增第二个 HTTP 端口。** 不写 `http://` 站点块，不做 80→8443 跳转；`gateway.port` 是中继上唯一的 HTTP 服务端口，理由见第 3 节。
 3. **不把 18080 暴露到公网。** 隧道端点是明文 HTTP。
 4. **不关闭 `StrictHostKeyChecking`。** 内网侧固定为 `yes`；需要换主机密钥时更新 `known_hosts` 并记录指纹。
 5. **不在中继上放 DSH 凭据。** 中继只需要 SSH 公钥、TLS 私钥/证书、Caddyfile。
@@ -321,12 +341,13 @@ bantime  = 3600
 ```
 # 中继主机
 ss -ltnp | grep -E '18080|8443'         # 18080 必须是 127.0.0.1
+ss -ltnp                                # 对外只应有 8443 与 sshd，见第 3 节
 sshd -T -C user=relay,host=relay,addr=127.0.0.1 | grep -iE 'gatewayports|permitopen|allowtcpforwarding'
 
 # 未认证：期望 401，且响应里没有 set-cookie
 curl -sS --cacert <ca> -D- -o /dev/null https://<authority>/ | grep -iE '^HTTP|^set-cookie'
 
-# 认证成功：期望 200 或 502，且响应里有 relay_session
+# 认证成功：期望 200 或 502；两条 Cookie 都在，且都带 Secure
 curl -sS --cacert <ca> -u me:<pw> -D- -o /dev/null https://<authority>/ | grep -iE '^HTTP|^set-cookie'
 
 # 隧道未连接：期望 502 且带可读提示，不是空响应
@@ -336,10 +357,11 @@ curl -sS --cacert <ca> -u me:<pw> https://<authority>/
 curl -sS -o /dev/null -w '%{http_code}\n' --max-time 3 http://<authority>/
 ```
 
-两条必查项：
+三条必查项：
 
 1. **未认证请求不得带 `set-cookie`。** 带上就说明 `handle` 段漏了 `route`，任何人都能领到会话密钥并绕开口令。这是整份清单里最容易在改动中被破坏、又最不显眼的一条。
 2. **认证成功后必须带 `relay_session`。** 缺它时 WebSocket 握手会失败，而普通请求看起来一切正常。
+3. **认证成功后每条 `set-cookie` 都要带 `Secure`**，包括 DSH 自己那条 `dsh-auth-…`。缺它就说明 `header_down` 那一行掉了或写成了站点级 `header`——后者看起来像在做同一件事，实际不起作用。
 
 另外核对一次证书链与有效期，确认 90 天的覆盖真的生效（少了 `intermediate_lifetime` 时这里会显示 7 天）：
 

@@ -10,13 +10,14 @@
 | 中继侧状态页 | 免登录地把"隧道是否连通"暴露在公网，本身是一个需要额外设计的信息面；卡片与启动自检已经覆盖了同一个问题 |
 | 中继侧 TOTP | 需要在中继上多跑一个服务，破坏"中继只有 sshd 与 Caddy"这条简化 |
 | 多中继与故障切换 | 单用户场景收益低，而代价是权威集合、书签入口、自检都要处理"哪一个可用" |
+| 中继上的第二个 HTTP 端口 | Cookie 不按端口隔离，多一个端口就多一条读到会话 Cookie 的路；这条不设开关，见 [security.md](security.md) |
 | 桌面端 | Electron 走 IPC 不开端口，没有需要转发的东西 |
 | 逐设备令牌与吊销 | 浏览器侧只能退化成"口令换 Cookie"，在单用户场景下并不比现在更强。全量吊销仍可用轮换 DSH 会话密钥实现，见 [modules/operations.md](modules/operations.md) |
 | 远程改配置 | 这是 DSH 对非 loopback 页面的既定行为，任何绕过它的做法都要在插件里另建一套配置面，规模远超本设计 |
 
 ## 实现阶段的验证计划
 
-下面每一项都是"按源码与文档推导、但只能靠一次真实运行确认"的假设。已经用真实 Caddy（v2.10.0）在 loopback 上验证过的部分——Host 透传、`handle_errors` 接住合成 502、会话 Cookie 与 Basic 两种 WebSocket 升级、未声明 Host 的兜底、证书有效期配对、未认证响应不得带 `Set-Cookie`、日志打码——不在此列，它们的结论与证据写在 [modules/relay-host.md](modules/relay-host.md) 与 [security.md](security.md)。
+下面每一项都是"按源码与文档推导、但只能靠一次真实运行确认"的假设。已经用真实 Caddy（v2.10.0）在 loopback 上验证过的部分——Host 透传、`handle_errors` 接住合成 502、会话 Cookie 与 Basic 两种 WebSocket 升级、未声明 Host 的兜底、证书有效期配对、未认证响应不得带 `Set-Cookie`、给 DSH 的 Cookie 补 `Secure`（含站点级 `header` 做不到这件事）、日志打码——不在此列，它们的结论与证据写在 [modules/relay-host.md](modules/relay-host.md) 与 [security.md](security.md)。
 
 | 假设 | 依据 | 若错的后果 | 验证方式 |
 | --- | --- | --- | --- |

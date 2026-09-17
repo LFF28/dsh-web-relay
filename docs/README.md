@@ -16,7 +16,7 @@ dsh plugin --profile web add file:/path/to/dsh-web-relay
 | --- | --- | --- |
 | 1 | 轻量化 | 一个 npm 包、两个半边（host 插件 + 一张设置卡片）、host 侧 6 个模块；隧道复用系统 OpenSSH，公网入口复用 Caddy，不自研 TLS、协议、密码学 |
 | 2 | 使用公网中继服务器（腾讯云 / 阿里云） | 服务器主动向中继拨出 SSH 反向转发；中继上只有系统 `sshd` 与 Caddy，不装本项目的任何代码 |
-| 3 | 只服务我一个人，暴露在公网，必须安全 | 中继侧强制 TLS + 网关口令，DSH 侧保留权威绑定 Cookie；见 [security.md](security.md) |
+| 3 | 只服务我一个人，暴露在公网，必须安全 | 中继侧强制 TLS + 网关口令，且只有一个 HTTP 端口；DSH 侧保留权威绑定 Cookie，Cookie 缺的 `Secure` 由中继补上，见 [security.md](security.md) |
 | 4 | 部署转发 `dsh web` | DSH 仍只监听 `127.0.0.1`；浏览器只接触中继，永不直连内网主机 |
 | 5 | 暂无域名 | 中继用 Caddy 自带的本地 CA 为 IP 权威签发证书；不装该 CA 时要接受"非私人连接"的风险，见 [security.md](security.md) |
 
@@ -48,6 +48,7 @@ dsh plugin --profile web add file:/path/to/dsh-web-relay
 
 - 内网主机**不开任何入站端口**；连接方向永远由内网主机发起，第三方即使知道公网 IP 也连不到它。
 - 中继上的 `127.0.0.1:18080` 只在 loopback 上，能连它的只有同一台机器上的 Caddy，见 [modules/relay-host.md](modules/relay-host.md)。
+- 中继对外只有 `8443` 一个 HTTP 端口。Cookie 不按端口隔离（RFC 6265 第 8.5 节），多一个端口就多一条读到会话 Cookie 的路，见 [security.md](security.md)。
 
 ## 首次使用流程
 
