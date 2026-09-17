@@ -211,7 +211,7 @@ ss -ltnp | grep 18080        # 必须是 127.0.0.1:18080，不是 0.0.0.0:18080
 - **尾部那个 `:@@GATEWAY_PORT@@` 兜底站点是必要的。** 站点地址做主机匹配，Host 与权威不一致的请求不进入本站点。Caddy 对"监听地址上没有站点匹配"的请求返回 **200 空响应**——不是 403、不是 404，浏览器上是一片空白。这条空白页极难归因，因此显式给一个能读懂原因的答案。实测：`Host: evil.example` 时未加兜底站点得到 200 空响应，加上后得到 421 与提示文本；兜底站点不影响已声明站点的证书签发与握手。兜底站点不带 `log` 段，因此 421 请求不进访问日志：原因已经写在页面上，而把它记进日志只会让两个站点争用同一个日志文件。
 - **`stream_timeout 24h`**：给长连接一个上限，避免陈旧连接永久占用；客户端会在被切断后自动重连。
 - **上游写成一个具名片段 `(dsh-relay-upstream)`，两个分支各 `import` 一次。** 两个分支必须给出完全相同的响应，重复一份 `reverse_proxy` 时最容易在改动里只动一处；`caddy validate` 对这两条路径不做交叉检查。
-- **`header_down Set-Cookie "$" "; Secure"` 是补 `Secure` 的唯一可行写法**，站点级 `header` 做不到；理由与实测结论见上一节。
+- **`header_down Set-Cookie "$" "; Secure"` 按整个值匹配再追加**：与 DSH 的属性顺序无关，也不会给本来就带 `Secure` 的响应留下重复属性。换成 `dsh-auth-` 前缀的定点写法会在 DSH 调整属性顺序时静默失效，换成站点级 `header` 则要么不生效（未延迟）、要么连带改写 Caddy 自己写的 `relay_session`；理由与实测结论见上一节。
 - 写入后跑一次 `caddy fmt --overwrite`：不格式化时 `caddy validate` 每次都会打出 `Caddyfile input is not formatted` 警告，把真正的错误淹掉。
 
 ### 内网证书的续签
@@ -220,11 +220,13 @@ Caddy 的内网签发者自己负责续签，中继上不需要 cron 也不需�
 
 ### Cookie 的 `Secure` 由中继补上
 
-DSH 自己下发的浏览器 Cookie 是 `Max-Age; Path=/; Expires; HttpOnly; SameSite=Strict`，**没有 `Secure`**。插件不修改 DSH 源码，因此补这一位只能在中继上做。
+DSH 自己下发的浏览器 Cookie 是 `Max-Age; Path=/; Expires; HttpOnly; SameSite=Strict`，**没有 `Secure`**（`packages/client/connection/src/browser-auth.ts` 的 `sessionCookie()`，也是整个 DSH 里唯一的 `set-cookie`）。插件不修改 DSH 源码，因此补这一位只能在中继上做。
 
-RFC 6265 第 8.3 节把这件事说得很直白：走安全信道时服务器应当给每个 Cookie 加 `Secure`，否则"安全信道提供的保护基本是空的"。上游定义里的 `header_down Set-Cookie "$" "; Secure"` 因此把每个 `Set-Cookie` 的值整体匹配（正则 `$` 命中任意值）并在末尾追加 `; Secure`。按整个值匹配是为了与 Cookie 怎么写无关：DSH 以后调整属性顺序、或加一条新的 Cookie，都不需要改这份模板。
+RFC 6265 第 8.3 节把这件事说得很直白：走安全信道时服务器应当给每个 Cookie 加 `Secure`，否则"安全信道提供的保护基本是空的"。上游定义里的 `header_down Set-Cookie "$" "; Secure"` 把每个 `Set-Cookie` 的值整体匹配并在末尾追加：`header_down` 的匹配操作数是正则（RE2），`$` 命中任意值的末尾，替换值按字面写入。Cookie 的值里不能出现 `;`（RFC 6265 第 4.1.1 节），所以追加上的 `; Secure` 不可能被并进值里。
 
-这里有一处 Caddy 的坑值得记下：**站点级的 `header` 指令做不到这件事**。`header Set-Cookie <匹配> <替换>` 的匹配操作数不吃子串——实测写成 `header Set-Cookie "…SameSite=Strict" "…SameSite=Strict; Secure"` 时上游那条 Cookie 原样穿过、没有 `Secure`，而 `header { Set-Cookie { replace … } }` 会被适配成一段无意义的 JSON。能生效的是 `reverse_proxy` 内的 `header_down`。实测：上游同时给出 `relay_session`（本来就带 `Secure`）与 DSH 的 `dsh-auth-…`（不带）时，只有后者被追加，且没有出现重复的 `Secure`。
+匹配整个值而不是 `dsh-auth-` 前缀，是为了与 DSH 的属性顺序无关。定点写法能过校验也确实工作——实测 `header_down Set-Cookie "(^dsh-auth-.*SameSite=Strict)$" "$1; Secure"` 对 DSH 当前发出的 Cookie 追加成功——但它把正确性绑在"`SameSite=Strict` 恰好是最后一个属性"上。实测四种 Cookie 下它的行为：属性顺序不变时追加成功；`SameSite=Strict` 不在末尾时不追加，Cookie 静默地失去 `Secure`；本来就带 `Secure` 时变成 `Secure; Secure`；非 `dsh-auth-` 的 Cookie 不碰。第二种是本设计唯一不能接受的失败：不报错、页面照常工作，只是保护没了。`$` 那种写法没有这个失败模式，代价是非 DSH 的 Cookie 也会被追加，而这个代价为零——上游只有 DSH 一个进程，中继自己的 `relay_session` 由 Caddy 写、不经过 `header_down`。
+
+站点级的 `header` 指令也能做到，但必须延迟执行，这是实测出来的差别。`header Set-Cookie "$" "; Secure"`（既不带 `>` 也不带 `defer`）对代理响应完全不生效，Cookie 原样穿过；写成 `header >Set-Cookie "$" "; Secure"` 或在块里加 `defer` 才生效。Caddy 文档说明非延迟的头部操作在代理写出响应头之前就执行完了。延迟之后它面对的是最终的头集合，因此会把 Caddy 自己在同一站点里写的 `relay_session` 一起改写（实测得到 `…SameSite=Lax; Secure`，多出一个 `Secure`）；要用它就得再加一层只认 `dsh-auth-` 的锚定，于是又回到上面那种顺序依赖。`header_down` 只看上游那一份响应，Caddy 自己写的 Cookie 不在其中，因此不需要锚定就能既覆盖 DSH 的 Cookie、又不碰 `relay_session`。
 
 两个分支——会话 Cookie 直通与口令分支——共用同一份上游定义 `(dsh-relay-upstream)`，就是为了让这条改写只有一处，不会只改一边。
 
@@ -361,7 +363,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' --max-time 3 http://<authority>/
 
 1. **未认证请求不得带 `set-cookie`。** 带上就说明 `handle` 段漏了 `route`，任何人都能领到会话密钥并绕开口令。这是整份清单里最容易在改动中被破坏、又最不显眼的一条。
 2. **认证成功后必须带 `relay_session`。** 缺它时 WebSocket 握手会失败，而普通请求看起来一切正常。
-3. **认证成功后每条 `set-cookie` 都要带 `Secure`**，包括 DSH 自己那条 `dsh-auth-…`。缺它就说明 `header_down` 那一行掉了或写成了站点级 `header`——后者看起来像在做同一件事，实际不起作用。
+3. **认证成功后每条 `set-cookie` 都要带 `Secure`**，包括 DSH 自己那条 `dsh-auth-…`。缺它就说明 `header_down` 那一行掉了或落到了别处；`dsh-auth-…` 被追加成 `Secure; Secure` 不改变行为（重复的布尔属性浏览器忽略），但说明改写被换成了会重复追加的写法。
 
 另外核对一次证书链与有效期，确认 90 天的覆盖真的生效（少了 `intermediate_lifetime` 时这里会显示 7 天）：
 

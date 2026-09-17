@@ -20,7 +20,8 @@
 # 完全相同的响应，分开写时容易只改一处。
 (dsh-relay-upstream) {
 	reverse_proxy 127.0.0.1:@@RELAY_PORT@@ {
-		# DSH 自己不给 Cookie 加 Secure，由中继补上。
+		# DSH 自己不给 Cookie 加 Secure，由中继补上。这一行必须留在 reverse_proxy
+		# 内：站点级 header 不延迟时不生效，延迟后又会改写下面那个 relay_session。
 		# 按整个值匹配再追加，与 Cookie 的属性写法无关。
 		header_down Set-Cookie "$" "; Secure"
 		stream_timeout 24h

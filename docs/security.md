@@ -38,7 +38,7 @@
 
 **为什么第二层是必需的，而不是可选加固。** DSH 自身的认证是单操作者的：一个启动令牌、一个长期 Cookie，没有多用户、没有吊销列表、没有频率限制。把它直接挂到公网等于把一个 RCE 级界面挂到公网。
 
-**DSH 自己不给 Cookie 加 `Secure`，由中继补上。** DSH 下发的是 `Max-Age; Path=/; Expires; HttpOnly; SameSite=Strict`，没有 `Secure`。缺了这一位，同一个权威上的任何一次明文请求都会把 Cookie 送出去，RFC 6265 第 8.3 节对这种情况的结论是"安全信道提供的保护基本是空的"。插件不修改 DSH 源码，所以补这一位发生在上游定义里的 `header_down Set-Cookie "$" "; Secure"`：它把每个 `Set-Cookie` 的值整体匹配并在末尾追加，与 Cookie 怎么写无关。站点级的 `header` 指令做不到同一件事（实测匹配操作数不吃子串），改动那一块时要连带重跑 [modules/relay-host.md](modules/relay-host.md) 第 7 节的 `Secure` 自检。
+**DSH 自己不给 Cookie 加 `Secure`，由中继补上。** DSH 下发的是 `Max-Age; Path=/; Expires; HttpOnly; SameSite=Strict`，没有 `Secure`。缺了这一位，同一个权威上的任何一次明文请求都会把 Cookie 送出去，RFC 6265 第 8.3 节对这种情况的结论是"安全信道提供的保护基本是空的"。插件不修改 DSH 源码，所以补这一位发生在上游定义里的 `header_down Set-Cookie "$" "; Secure"`：它把每个 `Set-Cookie` 的值整体匹配并在末尾追加，与 Cookie 的属性顺序无关，也不会给本来就带 `Secure` 的响应对出重复属性。改动那一块时要连带重跑 [modules/relay-host.md](modules/relay-host.md) 第 7 节的 `Secure` 自检——按 `dsh-auth-` 前缀定点匹配的写法能过校验、今天也能工作，但 DSH 一旦调整属性顺序就会静默失效。
 
 **中继上只有一个 HTTP 端口，这是 Cookie 的要求而不只是收缩攻击面。** RFC 6265 第 8.5 节的结论是 Cookie 不提供端口隔离：同一台主机上另一个端口上的服务既读得到也写得到同一个 Cookie。DSH 的 Cookie 名只由权威的 host 决定，所以中继上多开一个能吃 Cookie 的端口就等于多一条绕开第四层的路。因此"权威只以 HTTPS 提供服务"加上"中继上不存在第二个 HTTP 服务端口"是同一件事的两半，插件在这两条上都不提供配置项。
 

@@ -17,7 +17,7 @@
 
 ## 实现阶段的验证计划
 
-下面每一项都是"按源码与文档推导、但只能靠一次真实运行确认"的假设。已经用真实 Caddy（v2.10.0）在 loopback 上验证过的部分——Host 透传、`handle_errors` 接住合成 502、会话 Cookie 与 Basic 两种 WebSocket 升级、未声明 Host 的兜底、证书有效期配对、未认证响应不得带 `Set-Cookie`、给 DSH 的 Cookie 补 `Secure`（含站点级 `header` 做不到这件事）、日志打码——不在此列，它们的结论与证据写在 [modules/relay-host.md](modules/relay-host.md) 与 [security.md](security.md)。
+下面每一项都是"按源码与文档推导、但只能靠一次真实运行确认"的假设。已经用真实 Caddy（v2.10.0）在 loopback 上验证过的部分——Host 透传、`handle_errors` 接住合成 502、会话 Cookie 与 Basic 两种 WebSocket 升级、未声明 Host 的兜底、证书有效期配对、未认证响应不得带 `Set-Cookie`、给 DSH 的 Cookie 补 `Secure`（含定点匹配、站点级 `header` 的未延迟与延迟两种写法）、日志打码——不在此列，它们的结论与证据写在 [modules/relay-host.md](modules/relay-host.md) 与 [security.md](security.md)。
 
 | 假设 | 依据 | 若错的后果 | 验证方式 |
 | --- | --- | --- | --- |

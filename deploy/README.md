@@ -18,7 +18,7 @@
 
 `Caddyfile.snippet` 里的全局选项块（`auto_https`、`pki`）在整个 Caddyfile 里只能出现一次。写入前检查块外是否已经声明过，命中就停下并报出那一行。具名片段 `(dsh-relay-upstream)` 的名字同样必须唯一，一并检查。
 
-模板里的两个站点共用 `@@GATEWAY_PORT@@`，具名片段被两个分支各 `import` 一次。改动这份模板时，`header_down Set-Cookie` 那一行是唯一给 DSH 的 Cookie 补 `Secure` 的地方：站点级的 `header` 指令做不到同一件事，换成它会让 Cookie 静默地失去 `Secure`。
+模板里的两个站点共用 `@@GATEWAY_PORT@@`，具名片段被两个分支各 `import` 一次。改动这份模板时，`header_down Set-Cookie "$" "; Secure"` 那一行是唯一给 DSH 的 Cookie 补 `Secure` 的地方，必须留在 `reverse_proxy` 内：站点级 `header` 不延迟时对代理响应不生效，延迟后又会连 Caddy 自己写的 `relay_session` 一起改写；按 `dsh-auth-` 前缀定点匹配则会在 DSH 调整属性顺序时静默失效。三种写法的实测结论见 [../docs/modules/relay-host.md](../docs/modules/relay-host.md) 第 3 节。
 
 占位符在替换后不应残留 `@@`：写入完成后回读一次，发现残留按失败处理。
 
