@@ -369,4 +369,3 @@ curl -sS -o /dev/null -w '%{http_code}\n' --max-time 3 http://<authority>/
 openssl s_client -connect <authority> </dev/null 2>/dev/null | openssl x509 -noout -dates
 openssl x509 -in /var/lib/caddy/.local/share/caddy/pki/authorities/dsh-relay/intermediate.crt -noout -dates
 ```
-
