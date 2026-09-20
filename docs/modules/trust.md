@@ -79,7 +79,7 @@ publicAuthority = canonicalAuthority(vps.host) + ':' + gateway.port
 | --- | --- | --- |
 | 探测 ① 返回 403 | 权威没进 `trustedHosts` | 打印 `webRelay.authority()` 与 `connection` 行实际解析出的 `trustedHosts`，指出差异 |
 | 探测 ① 连接被拒 | 隧道没通或端口不对 | 打印隧道 `status()` 与 `ctx.webServer.port` / `ctx.webServer.host` 的实际值 |
-| 探测 ② TLS 证书校验失败 | 客户端不信任中继 CA | 输出根证书指纹与 [entry.md](entry.md) 的下载地址 |
+| 探测 ② TLS 证书校验失败 | 客户端不信任中继 CA | 输出根证书指纹，并指向 [entry.md](entry.md) 里把根证书送到设备的方式 |
 | 探测 ② 401 但浏览器仍打不开 | 浏览器侧 Cookie 或网关口令 | 指向 [security.md](../security.md) 的"必须成立的前置条件" |
 | 探测 ② 超时 | 安全组 / Caddy 未监听 / 端口不通 | 指向 [relay-host.md](relay-host.md) 的防火墙清单 |
 

@@ -1,20 +1,19 @@
 # 模块：公网入口、CA 分发与登录接续
 
-职责：给操作者一条**不含任何秘密、可以收藏**的入口 URL，让手机重新进入时只需输入一次网关口令；同时把中继 CA 根证书放在一条可核对的地址上。
+职责：给操作者一条**不含任何秘密、可以收藏**的入口 URL，让手机重新进入时只需输入一次网关口令；并说明中继 CA 根证书如何到达设备，以及用哪个指纹核对它。
 
 ## 要解决的问题
 
 DSH 的浏览器认证是"进程启动令牌 → Cookie"：`dsh web` 启动时打印一个带 `?token=` 的 URL，浏览器打开它，`authorizeIndex()` 校验权威与令牌，下发一个权威绑定的 HMAC Cookie（默认 30 天，`connection` 行的 `cookieMaxAgeDays`）。令牌每次启动都变，因此那个 URL 不能收藏。
 
-本模块解决"重新拿令牌"这一段：入口本身不携带凭据，操作者在浏览器弹出的口令框里输入网关口令，请求到达内网主机后由插件在服务端完成一次令牌交换。第二个问题是"装不装 CA"——根证书必须能被取到、且能被核对指纹，否则"装 CA"这个选项在手机上无法完成。
+本模块解决"重新拿令牌"这一段：入口本身不携带凭据，操作者在浏览器弹出的口令框里输入网关口令，请求到达内网主机后由插件在服务端完成一次令牌交换。第二个问题是"装不装 CA"——根证书必须能被送到设备、且能被核对指纹，否则"装 CA"这个选项在手机上无法完成。
 
-## 两条路由
+## 一条路由
 
-两条都是精确路径注册（`kind: 'exact'`），因此不会与 SPA 的 fallback 或 `/api` 前缀冲突。
+它是精确路径注册（`kind: 'exact'`），因此不会与 SPA 的 fallback 或 `/api` 前缀冲突。
 
 ```
-GET /relay/enter     # entry.enabled 为真时注册
-GET /relay/ca.crt    # 中继 CA 根证书副本
+GET /relay/enter     # entry.enabled 为真时注册，公网 HTTP 面上唯一的路由
 ```
 
 `/relay/enter` 不接受查询参数，也不要求任何 Cookie。它能这样是因为它**在结构上位于网关口令之后**：中继的站点块把没有网关会话 Cookie 的请求先交给 `basic_auth`，只有口令通过才继续代理到内网主机（见 [relay-host.md](relay-host.md)）。因此"请求到达了 `/relay/enter`"本身就是"口令正确"的证明，插件不需要再校验一遍，也不持有任何入口凭据。
@@ -33,7 +32,7 @@ GET /relay/ca.crt    # 中继 CA 根证书副本
 
 `ctx.connection` 通过 `ctx.inject(['connection'], (c) => ...)` 获取，不放进顶层 `inject`（那会与 `connection` 行注入 `webRelay` 形成等待环），与 `@deepseek-ai/dsh-client-connection` 自己用 `ctx.inject(['webServer'], ...)` 的写法一致。
 
-`/relay/ca.crt` 读 `$DSH_HOME/dsh-web-relay/ca/root.crt`（引导第 10 步取回，`0644`），以 `application/x-x509-ca-cert` 与 `Content-Disposition: attachment; filename="dsh-web-relay-ca.crt"` 返回。引导还没产出证书时它回答 `404`。公网上的这一条在网关口令之后，与其他路径一样要先通过 `basic_auth`；它与 `/relay/enter` 的可用性无关，因此不受 `entry.enabled` 影响。第一台设备因此不能靠"信任一个自己还不信任的 TLS 端点"取到根证书：要么从服务器本机取（`http://127.0.0.1:<dshPort>/relay/ca.crt`，或直接复制 `$DSH_HOME/dsh-web-relay/ca/root.crt`）再经本地复制、AirDrop、聊天软件等不依赖 TLS 信任的渠道送到设备，要么在设备上用 `curl -k -u me:<password> https://<publicAuthority>/relay/ca.crt` 取。
+公网 HTTP 面上只有这一条路由，根证书不经过它。根证书由 Caddy 在中继上生成，由引导第 10 步用 ssh 取到 `$DSH_HOME/dsh-web-relay/ca/root.crt`（`0644`），再经本地复制、AirDrop、聊天软件等不依赖 TLS 信任的渠道送到设备。第一台设备因此不能靠"信任一个自己还不信任的 TLS 端点"取到根证书——这一点现在是结构性的：不存在任何提供根证书的 HTTP 端点。实测 `https://<publicAuthority>/relay/ca.crt` 不带凭据时是 `401`，带上网关口令（或带 DSH 会话）时是 `404`，即这条路径已经不存在。设备装好后用记录的 `caFingerprint` 核对指纹，可与中继上 `data/pki/authorities/dsh-relay/root.crt` 逐字比对。
 
 直接打开 `https://<publicAuthority>/`（不带 `/relay/enter`）不会进入入口：浏览器还没有 DSH 会话 Cookie 时它得到 DSH 自己的 `401` 与 `unauthorized` 响应体，并停在那一页。Caddy 不会把它改写成跳转，也没法改写：`handle_errors` 只处理 Caddy 自己的处理错误（502 一类），不改变上游透传的 4xx。因此入口地址只能由卡片与引导横幅告诉操作者，不存在"首次访问自动带路"。
 
@@ -63,13 +62,16 @@ GET /relay/ca.crt    # 中继 CA 根证书副本
 
 ## 启动横幅
 
-引导、隧道与自检都就绪后（或自检超时后），插件向 stdout 打印一行入口地址，形如 harness 自己打印的 `dsh web:` 那一行：
+引导、隧道与自检都就绪后（或自检超时后），插件向 stdout 打印横幅，形如 harness 自己打印的 `dsh web:` 横幅。四行分别是入口地址、CA 指纹、观察到（或按固定值校验通过）的中继主机密钥指纹，以及装到的 Caddy 版本；引导有步骤失败时第一行会带上这个提示：
 
 ```
 dsh-web-relay: https://<publicAuthority>/relay/enter
+  根证书指纹 <caFingerprint>
+  中继主机密钥 <中继主机公钥 SHA256 指纹，或「未固定，见卡片记录」>
+  Caddy <版本号，或「沿用已有安装」>
 ```
 
-之所以直接写 stdout，是因为本构建的日志服务没有 console exporter：逐步引导进度走 harness 日志，持久状态写进 `web-relay-record` 记录，只有入口 URL 需要操作者在终端上直接看到。CA 指纹与下载地址都在记录的 `caFingerprint` / `caUrl` 里，与卡片状态区一致，可在中继上对 `data/pki/authorities/dsh-relay/root.crt` 核对。
+之所以直接写 stdout，是因为本构建的日志服务没有 console exporter：逐步引导进度走 harness 日志，持久状态写进 `web-relay-record` 记录，入口 URL 与 CA 指纹需要操作者在终端上直接看到。指纹就是记录里的 `caFingerprint`，与卡片状态区一致，可在中继上对 `data/pki/authorities/dsh-relay/root.crt` 核对。
 
 这一行不含任何秘密，因此没有"何时打印"的策略开关。它只在启动时打印，不进入浏览器可见面，因此不需要客户端本地化与快照测试；它不写任何 HTTP 响应体。
 

@@ -6,8 +6,8 @@
 
 | 观测点 | 位置 | 内容 |
 | --- | --- | --- |
-| 设置卡片状态区 | 服务器本机浏览器 | 引导状态、权威、入口 URL、CA 指纹与下载地址、逐步引导结果、最近一次错误、最近一次转发前预检 |
-| 启动横幅 | 内网主机 `dsh web` 终端 stdout | 一行 `dsh-web-relay: https://…/relay/enter`；其余状态在 harness 日志与 `web-relay-record` 记录里 |
+| 设置卡片状态区 | 服务器本机浏览器 | 引导状态、权威、入口 URL、CA 指纹、逐步引导结果、最近一次错误、最近一次转发前预检 |
+| 启动横幅 | 内网主机 `dsh web` 终端 stdout | `dsh-web-relay: https://…/relay/enter` 一行与 CA 指纹；其余状态在 harness 日志与 `web-relay-record` 记录里 |
 | 隧道日志 | 内网主机 `dsh web` 终端 | `ssh` 进程每次退出的退出码与 stderr 摘要 |
 | 隧道状态 | 记录 `web-relay-record` 的 `tunnelState`（卡片）与 `ctx.webRelay.status()`（宿主） | `stopped` / `starting` / `running` / `backing-off`；`status()` 另带 `since` / `connectedCount` / `lastExit` / `lastPreflight` |
 | 引导步骤结果 | 记录的 `steps` | 每步 `ok` / `failed` / `skipped` 与一句话说明；第 13 步的 detail 另带 `中继对外监听：…` |
@@ -25,7 +25,7 @@
 | 症状 | 最可能的原因 | 先看 |
 | --- | --- | --- |
 | 卡片显示某一步 `failed` | 引导停在那一步，后续步骤是 `skipped` | 卡片状态区的该步说明；它带着 `ssh` 原文 |
-| 手机打不开，Safari 报证书错误 | 客户端未信任中继 CA，或未在"证书信任设置"里开启完全信任 | 第一台设备从服务器本机复制根证书，或经不依赖 TLS 信任的渠道送到设备；之后可用 `curl -k -u me:<网关口令> https://<authority>/relay/ca.crt` 重新取，与卡片显示的 SHA256 指纹核对 |
+| 手机打不开，Safari 报证书错误 | 客户端未信任中继 CA，或未在"证书信任设置"里开启完全信任 | 第一台设备从服务器本机复制根证书（`$DSH_HOME/dsh-web-relay/ca/root.crt`），或经不依赖 TLS 信任的渠道送到设备，与卡片显示的 `caFingerprint` 核对 |
 | 手机弹出重复的用户名/密码框 | 网关口令错，或换过口令后 Safari 缓存了旧的 | 卡片里改 `gateway.password` 并保存；在 Safari 里清除该站点数据 |
 | 页面加载出 403 | 权威没进 `trustedHosts`（`vps.host` + `gateway.port` 与 Caddy 站点地址不一致） | 内网启动日志的自检第 ① 项；它直接指出两个值的差异 |
 | 页面加载出 401 | 权威进了 `trustedHosts`，但 Cookie 不对（过期 / 换了权威 / 换了签名密钥） | 重新打开入口 URL `/relay/enter` |
@@ -122,7 +122,7 @@ sudo kill <pid>                  # 确认是本部署的残留后杀掉，端口
 
 ### 续签 TLS 证书
 
-Caddy 用内置签发者自动续签，90 天的有效期在此之上留了足够余量，正常情况不需要手工动作。"客户端不再信任证书"时通常是根证书被重新生成过（例如换过权威），这时重新取一次 `/relay/ca.crt` 并核对卡片上的指纹即可。
+Caddy 用内置签发者自动续签，90 天的有效期在此之上留了足够余量，正常情况不需要手工动作。"客户端不再信任证书"时通常是根证书被重新生成过（例如换过权威），这时重跑引导第 10 步更新 `$DSH_HOME/dsh-web-relay/ca/root.crt`，再把新证书送到设备并核对卡片上的 `caFingerprint` 即可。
 
 ### 卸载后清理中继
 

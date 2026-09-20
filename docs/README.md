@@ -57,8 +57,9 @@ dsh plugin --profile web add file:/path/to/dsh-web-relay
 1. 把插件装进 profile，重启 `dsh web`。
 2. 在**服务器本机**用浏览器打开 `http://127.0.0.1:3080`。首次配置只能在这里做：DSH 的客户端在非 loopback 页面上把设置持久化降级为内存，远程页面写不了设置（见 [security.md](security.md)）。
 3. 打开 设置 ▸ 插件 ▸ **Web Relay**，填入中继地址、管理账号与网关口令。保存即触发自动引导。
-4. 插件随后自动完成：生成本机专用中继密钥 → 用管理账号登录中继 → 建受限中继用户与 `authorized_keys` → 安装并配置 Caddy → 为中继权威签发证书 → 把权威写进 DSH 的组合层（host trust）→ 拉起 SSH 反向隧道。终端上打印一行 `dsh-web-relay: https://<权威>/relay/enter`。
-5. 手机用浏览器打开入口 URL（`https://<权威>/relay/enter`）并输入网关口令即可使用。**唯一需要你决定的是装不装中继 CA**：装了就消除证书警告，不装则每次访问都要手动点过警告且失去身份验证，见 [security.md](security.md) 的"证书与 CA"一节。
+4. 插件随后自动完成：生成本机专用中继密钥 → 用管理账号登录中继 → 建受限中继用户与 `authorized_keys` → 安装并配置 Caddy → 为中继权威签发证书 → 把权威写进 DSH 的组合层（host trust）→ 拉起 SSH 反向隧道。终端上打印横幅，第一行是入口地址 `dsh-web-relay: https://<权威>/relay/enter`，随后是中继 CA 指纹、中继主机密钥指纹与 Caddy 版本。引导第 10 步同时把中继上的 CA 根证书取回本机，存在 `$DSH_HOME/dsh-web-relay/ca/root.crt`。
+5. 把 `$DSH_HOME/dsh-web-relay/ca/root.crt` 送到手机上并安装：公网 HTTP 面只有 `/relay/enter` 一条路由，根证书不经过它，所以这一步走本机复制、隔空投送或聊天软件，装之前先与横幅或卡片上的 `caFingerprint` 核对。**唯一需要你决定的是装不装中继 CA**：装了就消除证书警告，不装则每次访问都要手动点过警告且失去身份验证，见 [security.md](security.md) 的"证书与 CA"一节。
+6. 手机用浏览器打开入口 URL（`https://<权威>/relay/enter`）并输入网关口令即可使用。
 
 ## 文档索引
 

@@ -66,7 +66,6 @@
 | `publicAuthority` | `string` | 已生效的权威，空字符串表示尚未生效 |
 | `observedHostKeyFingerprint` | `string` | 首次连接时实地观察到（或按固定值校验通过）的中继主机公钥指纹 |
 | `caFingerprint` | `string` | 中继 CA 根证书的 `SHA256:…` 指纹，供用户与 VPS 上 `data/pki/authorities/dsh-relay/root.crt` 核对 |
-| `caUrl` | `string` | 根证书下载地址，即 `https://<publicAuthority>/relay/ca.crt` |
 | `gateway.sessionSecret` | `secret` | 网关会话 Cookie 的比对值；首次引导时用 `randomBytes(24)` 的 base64url 生成并存进记录命名空间，只有 `gateway.password` 变化时才重新生成 |
 | `steps` | `{ id, title, status, detail }[]` | 最近一次引导的逐步结果，`status` 为 `ok`、`failed` 或 `skipped`；第 13 步的 `detail` 另带 `中继对外监听：…` |
 | `lastError` | `string` | 最近一次失败的原文摘要，成功时为空 |
