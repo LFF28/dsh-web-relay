@@ -1,13 +1,18 @@
 # dsh-web-relay — 托管块起点，块外内容原样保留。
+# 本块由插件放在文件的最前面：Caddy 要求全局选项块是文件里的第一样东西，而块外的
+# 站点（例如 apt 安装自带的 `:80` 静态站点）原样留在后面。
 # 占位符由插件在引导时替换：
 #   @@AUTHORITY@@       `vps.host:gateway.port`，浏览器地址栏里逐字出现的权威
-#   @@GATEWAY_PORT@@    `gateway.port`，与上一行里的端口相同
+#   @@HOST@@            权威里不带端口的主机名，给 `default_sni` 用
+#   @@GATEWAY_PORT@@    `gateway.port`，与第一行里的端口相同
 #   @@SESSION_SECRET@@  网关口令换来的会话密钥，来自记录的 `gateway.sessionSecret`
 #   @@BCRYPT_HASH@@     `caddy hash-password` 的输出，来自 `gateway.password`
 #   @@RELAY_PORT@@      `tunnel.relayPort`，默认 18080；必须与 ssh -R 参数一致
 # BEGIN dsh-web-relay
 {
 	auto_https disable_redirects
+	# 客户端对 IP 字面量不发 SNI；没有它时 Caddy 在裸 IP 访问下挑不到证书。
+	default_sni @@HOST@@
 	pki {
 		ca dsh-relay {
 			name "DSH Web Relay"
@@ -36,6 +41,10 @@
 }
 
 @@AUTHORITY@@ {
+	# 入口是 `https://<权威>/relay/enter`，不是裸权威。裸权威上的 DSH 只认带 token
+	# 的查询串或已有的 DSH 会话 Cookie，第一次访问必然 401，页面上只有一行
+	# `unauthorized`。`handle_errors` 改写不了它：它只接处理器抛出的错误（502 那类），
+	# 上游透传的 4xx 不算。因此入口地址由卡片与引导横幅负责给出。
 	tls {
 		issuer internal {
 			ca dsh-relay
@@ -68,8 +77,12 @@
 	}
 
 	log {
+		# 默认 100MiB×10 份对一台小盘中继太宽松：访问日志里每条 URI 都在，被刷时
+		# 先吃掉磁盘再谈排查。上限压到 100MiB 以内。
 		output file /var/log/caddy/dsh-relay-access.log {
 			mode 0600
+			roll_size 20MiB
+			roll_keep 5
 		}
 		format filter {
 			wrap json

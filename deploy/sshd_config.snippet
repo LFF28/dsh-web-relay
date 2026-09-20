@@ -10,4 +10,8 @@ Match User relay
     PermitTunnel no
     PermitTTY no
     ForceCommand /usr/sbin/nologin
+    # 没有保活就发现不了「对端异常消失」：监听套接字会一直留在中继上，下一次隧道
+    # 只能以 ExitOnForwardFailure 失败。15 秒探一次、3 次无应答断开，压到 45 秒内。
+    ClientAliveInterval 15
+    ClientAliveCountMax 3
 # END dsh-web-relay
