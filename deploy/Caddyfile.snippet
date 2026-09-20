@@ -62,7 +62,7 @@
 			basic_auth {
 				me @@BCRYPT_HASH@@
 			}
-			header Set-Cookie "relay_session=@@SESSION_SECRET@@; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000"
+			header Set-Cookie "relay_session=@@SESSION_SECRET@@; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=43200"
 			import dsh-relay-upstream
 		}
 	}

@@ -18,7 +18,7 @@ dsh plugin --profile web add file:/path/to/dsh-web-relay
 | 2 | 使用公网中继服务器（腾讯云 / 阿里云） | 服务器主动向中继拨出 SSH 反向转发；中继上只有系统 `sshd` 与 Caddy，不装本项目的任何代码 |
 | 3 | 只服务我一个人，暴露在公网，必须安全 | 中继侧强制 TLS + 网关口令，且只有一个 HTTP 端口；DSH 侧保留权威绑定 Cookie，Cookie 缺的 `Secure` 由中继补上，见 [security.md](security.md) |
 | 4 | 部署转发 `dsh web` | DSH 仍只监听 `127.0.0.1`；浏览器只接触中继，永不直连内网主机 |
-| 5 | 暂无域名 | 中继用 Caddy 自带的本地 CA 为 IP 权威签发证书；不装该 CA 时要接受"非私人连接"的风险，见 [security.md](security.md) |
+| 5 | 暂无域名 | 中继用 Caddy 自带的本地 CA 为 IP 权威签发证书。**这是这条通路上唯一需要你决定的选项**：装 CA 消除证书警告；不装则每次访问都要手动点过警告，且没有身份验证，见 [security.md](security.md) |
 
 非目标：多用户 / 多租户、按设备配对与逐个吊销、内网主机开放入站端口、桌面端（Electron 走 IPC 不开端口）、在任何客户端安装软件。
 
@@ -52,11 +52,13 @@ dsh plugin --profile web add file:/path/to/dsh-web-relay
 
 ## 首次使用流程
 
+**前提**：中继上你已经配好管理账号的公钥登录与免密 sudo。插件不配置中继的 SSH 认证，也不存管理口令，见 [configuration.md](configuration.md) 的"配置前的前提"。
+
 1. 把插件装进 profile，重启 `dsh web`。
 2. 在**服务器本机**用浏览器打开 `http://127.0.0.1:3080`。首次配置只能在这里做：DSH 的客户端在非 loopback 页面上把设置持久化降级为内存，远程页面写不了设置（见 [security.md](security.md)）。
-3. 打开 设置 ▸ 插件 ▸ **Web Relay**，填入中继地址、管理账号、网关口令。保存即触发自动引导。
-4. 插件随后自动完成：生成本机专用中继密钥 → 用管理账号登录中继 → 建受限中继用户与 `authorized_keys` → 安装并配置 Caddy → 为中继权威签发证书 → 把权威写进 DSH 的组合层（host trust）→ 拉起 SSH 反向隧道。终端横幅打印稳定书签 URL。
-5. 手机用浏览器打开稳定书签即可使用。可选：安装中继 CA 以消除证书警告，见 [security.md](security.md) 的"证书与 CA"一节。
+3. 打开 设置 ▸ 插件 ▸ **Web Relay**，填入中继地址、管理账号与网关口令。保存即触发自动引导。
+4. 插件随后自动完成：生成本机专用中继密钥 → 用管理账号登录中继 → 建受限中继用户与 `authorized_keys` → 安装并配置 Caddy → 为中继权威签发证书 → 把权威写进 DSH 的组合层（host trust）→ 拉起 SSH 反向隧道。终端横幅打印入口 URL。
+5. 手机用浏览器打开入口 URL（`https://<权威>/relay/enter`）并输入网关口令即可使用。**唯一需要你决定的是装不装中继 CA**：装了就消除证书警告，不装则每次访问都要手动点过警告且失去身份验证，见 [security.md](security.md) 的"证书与 CA"一节。
 
 ## 文档索引
 
@@ -67,10 +69,10 @@ dsh plugin --profile web add file:/path/to/dsh-web-relay
 | [security.md](security.md) | 威胁模型、分层防御、不接受的做法、风险接受、已知限制 |
 | [modules/plugin-bundle.md](modules/plugin-bundle.md) | 打包与分发：双半边结构、bundle patch、安装 / 卸载 / 升级 |
 | [modules/settings.md](modules/settings.md) | 设置命名空间与客户端卡片：字段、口令存储、状态回显、重新引导 |
-| [modules/bootstrap.md](modules/bootstrap.md) | 自动引导：用管理账号在中继上完成 sshd / Caddy / 证书配置 |
+| [modules/bootstrap.md](modules/bootstrap.md) | 自动引导：用管理账号在中继上完成 sshd / Caddy / 证书配置（前提：公钥登录 + 免密 sudo） |
 | [modules/trust.md](modules/trust.md) | 权威注册与启动自检：把"手机 403"变成"启动即报错" |
 | [modules/tunnel.md](modules/tunnel.md) | SSH 反向隧道守护：子进程、重连、释放、诊断 |
-| [modules/entry.md](modules/entry.md) | 公网入口与登录接续：稳定书签 `/relay/enter` |
+| [modules/entry.md](modules/entry.md) | 公网入口与登录接续：不含秘密的入口 URL `/relay/enter`、CA 分发 |
 | [modules/relay-host.md](modules/relay-host.md) | 中继侧的生效形态：sshd 加固、Caddyfile、防火墙、验证清单 |
 | [modules/operations.md](modules/operations.md) | 运行手册、故障定位表、轮换与吊销 |
 | [roadmap.md](roadmap.md) | 后续项与实现阶段的验证计划 |
@@ -83,5 +85,5 @@ dsh plugin --profile web add file:/path/to/dsh-web-relay
 | 内网主机 | 运行 `dsh web` 的机器，可以没有公网地址 |
 | 权威（authority） | 浏览器地址栏里的 `host[:port]`，本文档中记作 `publicAuthority` |
 | 网关 | 中继上的 Caddy 站点，负责 TLS 与口令层 |
-| 稳定书签 | `/relay/enter?key=...` 这条固定 URL，用于 Cookie 过期后重新进入 |
+| 入口 URL | `https://<publicAuthority>/relay/enter`，不含任何秘密，用于 Cookie 过期后重新进入 |
 | 引导 | 插件用管理账号在中继上自动完成的一次幂等配置动作 |

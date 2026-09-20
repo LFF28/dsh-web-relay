@@ -4,7 +4,7 @@
 
 ## 插件 `Config`（包内 `cordis.patch.yml`）
 
-行为旋钮随包发布，全部带默认值，用户不改也能运行。部署相关的地址、账号、口令**不在这里**。
+行为旋钮随包发布，全部带默认值，用户不改也能运行。部署相关的地址、账号、网关口令**不在这里**。
 
 | 字段 | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
@@ -17,14 +17,13 @@
 | `bootstrap.stepTimeoutMs` | `number` | `120000` | 单个引导步骤的总超时（含 `apt` 安装） |
 | `bootstrap.commandTimeoutMs` | `number` | `30000` | 引导里单条远程命令的超时 |
 | `bootstrap.connectTimeoutSec` | `number` | `10` | `ssh -o ConnectTimeout` |
-| `entry.enabled` | `boolean` | `true` | 关掉后不注册 `/relay/enter`，只剩下依赖 Cookie 的路径 |
-| `entry.banner` | `'on-generate' \| 'always' \| 'never'` | `on-generate` | 何时在终端打印书签 |
-| `entry.maxFailures` | `number` | `20` | 同一来源 IP 在窗口内允许的 `/relay/enter` 失败次数 |
-| `entry.lockoutMs` | `number` | `900000` | 超过上限后的锁定时长 |
+| `entry.enabled` | `boolean` | `true` | 关掉后不注册 `/relay/enter`，公网入口只剩依赖已有 Cookie 的路径 |
 | `selfCheck.publicProbe` | `boolean` | `true` | 引导结束后是否真的去请求一次公网权威 |
 | `selfCheck.probeTimeoutMs` | `number` | `5000` | 自检请求超时 |
 
 插件不假定 `dsh web` 的端口：它读 `ctx.webServer.port` 作为隧道目标端口，读 `ctx.webServer.host` 判断是否只绑在 loopback。
+
+转发前预检没有对应字段。它只在 `tunnel.relayPort` 确实被占、且持有者是本部署残留的 `sshd` 进程时才动手，因此不提供开关，理由见 [modules/tunnel.md](modules/tunnel.md)。
 
 ## `web-relay`（用户填的部署参数）
 
@@ -34,17 +33,26 @@
 | --- | --- | --- | --- |
 | `vps.host` | `string` | 空 | 中继主机地址（IP 或主机名）。为空时插件只做本地准备，不引导 |
 | `vps.port` | `number` | `22` | 管理连接的 SSH 端口 |
-| `vps.user` | `string` | `root` | 管理账号。非 `root` 时引导的提权步骤会走 `sudo -S` |
+| `vps.user` | `string` | `root` | 管理账号。引导的提权步骤与转发前预检连中继都用它；非 `root` 时调用 `sudo`，该账号必须免密 sudo |
 | `vps.identityFile` | `string?` | 空 | 管理账号私钥路径。留空则用系统身份解析（`~/.ssh/config`、默认私钥、`SSH_AUTH_SOCK`） |
-| `vps.password` | `secret?` | 空 | 管理账号口令。仅用于两处：`sudo -S` 提权；以及管理账号只能用口令登录时作为 SSH 口令（经 `SSH_ASKPASS` 助手提供，不落命令行） |
 | `vps.hostKeyFingerprint` | `string?` | 空 | 期望的中继主机公钥指纹，`SHA256:…` 形式。留空时首次连接按 TOFU 记录并打印指纹 |
 | `gateway.port` | `number` | `8443` | 公网入口 HTTPS 端口，也是中继上唯一的 HTTP 端口。权威即 `<vps.host>:<gateway.port>` |
-| `gateway.password` | `secret?` | 空 | Caddy 网关口令，用户自选。插件只把它交给 `caddy hash-password`，明文不落中继的磁盘 |
+| `gateway.password` | `secret?` | 空 | 网关口令，用户自选，手机每次进入时在浏览器口令框里输入。插件只把它交给 `caddy hash-password`，明文不落中继的磁盘 |
 | `tunnel.autoStart` | `boolean` | `true` | 参数齐全时是否自动拉起隧道 |
 | `bootstrapRequest` | `number` | `0` | 递增即触发一次完整重新引导；保存表单会自动递增 |
-| `entryRotateRequest` | `number` | `0` | 递增即轮换入口口令：插件生成新的 `entryKey` 并更新记录 |
 
 标记为 `secret` 的字段在发给浏览器时被替换成"已设置 / 未设置"，值本身不出宿主进程；`settings.yaml` 里仍是明文，文件权限是 `0600`，目录 `0700`。
+
+### 配置前的前提
+
+插件不配置中继的管理登录，它假定那一步已经由用户完成：
+
+- **公钥登录可用。** `vps.user` 能用密钥登录（`vps.identityFile` 指定，或系统身份解析能找到）。插件不做口令登录，也没有"管理账号口令"这个字段。
+- **该账号免密 sudo。** 非 `root` 账号执行 `sudo` 时不提示输入口令。插件只调用 `sudo -n`（非交互），需要口令时立即失败并如实报出，不会挂起等待输入。
+
+这两条是**前置条件而不是待配置项**：中继上没有本插件的任何代码，管理登录属于主机管理员的既有设置，插件不该在别人的机器上改 SSH 认证策略。引导第 3 步实地探测这两条，报告 `id -u`、`sudo -n true` 的退出码与 `ss` 是否可用，缺失时停在那里并给出原文。
+
+因此 `web-relay` 里唯一的秘密是 `gateway.password`。
 
 ## `web-relay-record`（插件写的运行记录）
 
@@ -58,23 +66,21 @@
 | `observedHostKeyFingerprint` | `string` | 首次连接时实地观察到（或按固定值校验通过）的中继主机公钥指纹 |
 | `caFingerprint` | `string` | 中继 CA 根证书的 `SHA256:…` 指纹，供用户与 VPS 上 `data/pki/authorities/dsh-relay/root.crt` 核对 |
 | `caUrl` | `string` | 根证书下载地址，即 `https://<publicAuthority>/relay/ca.crt` |
-| `entryKey` | `string` | 稳定书签的 key 段；它就是书签 URL 的全部可变部分 |
-| `gateway.sessionSecret` | `secret` | Caddy 会话 Cookie 的比对值，重新引导时保持不变，避免无谓地让手机重新登录 |
+| `gateway.sessionSecret` | `secret` | 网关会话 Cookie 的比对值；`gateway.password` 每次变化时重新生成，见下节 |
 | `steps` | `{ id, title, status, detail }[]` | 最近一次引导的逐步结果，`status` 为 `ok`、`failed` 或 `skipped` |
 | `lastError` | `string` | 最近一次失败的原文摘要，成功时为空 |
 
-稳定书签由 `publicAuthority` 与 `entryKey` 组合而成：`https://<publicAuthority>/relay/enter?key=<entryKey>`。key 只是一层便利令牌，承担身份的是网关口令与 DSH 的权威绑定 Cookie，所以它允许在卡片里可见、可复制，见 [modules/entry.md](modules/entry.md)。
+入口 URL 完全由 `publicAuthority` 决定：`https://<publicAuthority>/relay/enter`。它不含任何秘密，因此可以放心收藏、同步与备份；承担身份的是网关口令与 DSH 的权威绑定 Cookie，见 [modules/entry.md](modules/entry.md)。
 
 ## 改动的影响面
 
 | 改动的字段 | 插件动作 | 用户可见后果 |
 | --- | --- | --- |
-| `vps.host`、`gateway.port` | 重算权威 → 重解析 `connection` 行 → 重新引导 → 重启隧道 | DSH 的 Cookie 全部失效（Cookie 与权威绑定），手机要用新书签重新进入一次 |
-| `gateway.password` | 重新哈希并 reload Caddy | 手机上的网关凭据失效，浏览器重新询问 |
-| `vps.user`、`vps.port`、`vps.identityFile`、`vps.password` | 下一次引导使用新凭据 | 引导步骤用新凭据重跑一遍，已就绪的步骤快速跳过 |
+| `vps.host`、`gateway.port` | 重算权威 → 重解析 `connection` 行 → 重新引导 → 重启隧道 | DSH 的 Cookie 全部失效（Cookie 与权威绑定），手机要用新权威重新进入一次 |
+| `gateway.password` | 重新哈希并 reload Caddy，同时重置 `gateway.sessionSecret` | 所有设备的网关会话立刻失效，下次进入重新询问口令 |
+| `vps.user`、`vps.port`、`vps.identityFile` | 下一次引导与下一次转发前预检改用新凭据 | 引导步骤用新凭据重跑一遍，已就绪的步骤快速跳过；预检立即改用新凭据 |
 | `vps.hostKeyFingerprint` | 与观察值比对 | 不匹配时引导停止在这一步，不会带着未验证的连接继续 |
 | `tunnel.autoStart` 置为 `false` | 停隧道且不再自动拉起 | 公网入口返回隧道不可达页面 |
 | `bootstrapRequest` 递增 | 完整重跑一遍引导 | 端口、证书、`authorized_keys` 都已就绪时很快结束 |
-| `entryRotateRequest` 递增 | 生成新的 `entryKey` 并更新记录 | 旧书签立刻 404，需要用新书签重新收藏 |
 
 换掉 `vps.host` 之后，旧中继上的 `relay` 用户、`sshd` 片段和 Caddyfile 会原样留着。插件不去清理别人的机器；清理步骤见 [modules/operations.md](modules/operations.md)。

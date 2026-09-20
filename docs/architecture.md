@@ -20,13 +20,13 @@
  ┌───────────────────────────────────────────────────────────┐
  │ 内网 DSH 主机                                               │
  │   dsh web            WebServer 127.0.0.1:3080（仅 loopback） │
- │   dsh-web-relay 插件  守护 ③ + 自动引导 + 设置卡片            │
+ │   dsh-web-relay 插件  守护 ③（含预检）+ 自动引导 + 设置卡片  │
  └───────────────────────────────────────────────────────────┘
 ```
 
 ② 的 Host 必须原样透传：Caddy 一旦 `header_up Host` 改写成 loopback，DSH 的权威围栏就会把"声明式信任"变成"伪造 loopback 信任"，见 [modules/trust.md](modules/trust.md)。Caddy 只改响应里的一处：给上游的每个 `Set-Cookie` 补上 `Secure`（DSH 自己不下发这一位），见 [modules/relay-host.md](modules/relay-host.md)。
 
-③ 是中继上唯一监听 `18080` 的东西：`GatewayPorts no` 加上 `permitlisten="127.0.0.1:18080"` 让它只出现在 loopback，能连它的只有同机 Caddy，见 [modules/relay-host.md](modules/relay-host.md)。
+③ 是中继上唯一被允许监听 `18080` 的东西：`GatewayPorts no` 加上 `permitlisten="127.0.0.1:18080"` 让它只出现在 loopback，能连它的只有同机 Caddy，见 [modules/relay-host.md](modules/relay-host.md)。主机侧异常中断会让旧会话的端点残留在同一个端口上，由转发前预检清掉，见 [modules/tunnel.md](modules/tunnel.md)。
 
 ## 两条配置平面
 
@@ -34,9 +34,9 @@
 
 | 平面 | 载体 | 写入者 | 内容 |
 | --- | --- | --- | --- |
-| 行为旋钮 | 包内 `cordis.patch.yml` 的行 `config` | 包作者 | 超时、退避序列、横幅策略、失败上限、日志标签；都带默认值，无需配置即可运行 |
-| 部署参数 | settings 命名空间 `web-relay` | 用户在设置卡片里填 | 中继地址、管理账号与凭据、网关口令、主机密钥指纹固定 |
-| 运行记录 | settings 命名空间 `web-relay-record` | 插件 | 引导状态、观察到的指纹、书签 URL、CA 下载地址与指纹、引导步骤结果 |
+| 行为旋钮 | 包内 `cordis.patch.yml` 的行 `config` | 包作者 | 超时、退避序列、入口与自检开关、日志标签；都带默认值，无需配置即可运行 |
+| 部署参数 | settings 命名空间 `web-relay` | 用户在设置卡片里填 | 中继地址、管理账号与其私钥路径、网关口令、主机密钥指纹固定 |
+| 运行记录 | settings 命名空间 `web-relay-record` | 插件 | 引导状态、观察到的指纹、入口 URL、CA 下载地址与指纹、引导步骤结果 |
 
 把部署参数放进 settings 而不是 patch 文件，有三个直接后果：
 
@@ -76,8 +76,8 @@ Host 半边（`lib/index.js`）暴露一个 `dsh-web-relay` 插件，内部按�
 | `settings` | 注册两个命名空间，把用户字段规范化成一份 `Deployment`（地址、账号、路径） |
 | `bootstrap` | 幂等引导：登录中继、建受限用户、装 Caddy、发证书、取回 CA，见 [modules/bootstrap.md](modules/bootstrap.md) |
 | `trust` | 把 `publicAuthority` 变成围栏受信项（改权威时重解析 `connection` 行），并跑启动自检，见 [modules/trust.md](modules/trust.md) |
-| `tunnel` | SSH 反向转发子进程的生命周期、退避、健康判定、拆除，见 [modules/tunnel.md](modules/tunnel.md) |
-| `entry` | `/relay/enter` 与 `/relay/ca.crt` 两条精确路由，见 [modules/entry.md](modules/entry.md) |
+| `tunnel` | 转发前预检（清掉上一轮残留的监听端点）、SSH 反向转发子进程的生命周期、退避、健康判定、拆除，见 [modules/tunnel.md](modules/tunnel.md) |
+| `entry` | `/relay/enter`（只把启动令牌换成 DSH Cookie）与 `/relay/ca.crt` 两条精确路由，见 [modules/entry.md](modules/entry.md) |
 
 Client 半边（`lib/client.js`）只做一件事：向 `settings.plugin.item` 注册一张以命名空间 `web-relay` 为键的设置卡片。卡片自绘表单与状态区，只依赖平台模块表里的 `react`、`react/jsx-runtime`、`@deepseek-ai/dsh-client-store`、`@deepseek-ai/dsh-client-ui-primitives`，其余全部走服务：`ctx.slots`、`ctx.settingsScope`、`ctx.locale`。
 
@@ -89,7 +89,7 @@ Client 半边（`lib/client.js`）只做一件事：向 `settings.plugin.item` �
 | --- | --- |
 | `trustedHosts: string[]` | 当前应当被围栏接受的权威，取自 settings；未配置时为空数组。每次读取返回新数组，表达式可以安全展开 |
 | `authority(): string \| undefined` | 当前权威，形状为 `host[:port]` |
-| `status(): RelayStatus` | 引导状态、隧道状态、最近错误、观察到的指纹，供卡片回显与运行手册引用 |
+| `status(): RelayStatus` | 引导状态、隧道状态、最近错误、观察到的指纹、最近一次转发前预检，供卡片回显与运行手册引用 |
 
 ## 启动时序
 
@@ -102,9 +102,11 @@ Client 半边（`lib/client.js`）只做一件事：向 `settings.plugin.item` �
 ## 不变量
 
 - DSH 永远只监听 `127.0.0.1`；内网主机永远不监听公网。
+- 公网入口 URL 不含任何秘密；网关口令从不出现在 URL、书签或浏览器历史里。
 - Caddy 永远不改写 Host / Origin / Referer。
 - 中继上只有一个 HTTP 端口（`gateway.port`），且只有 loopback 上的 `18080` 作为它的上游。
 - 每个经过中继的 `Set-Cookie` 都带 `Secure`；DSH 自己不下发这一位，由上游定义里的 `header_down` 补上。
 - 中继上的反向转发端点永远只在 loopback。
+- 转发前预检只对持有 `tunnel.relayPort`、`/proc/<pid>/exe` 指向 `sshd`、且属主为 `relay` 的进程动手；其余情况一律停手并记录。
 - 浏览器只与中继说话，永不直连内网主机。
 - 插件在中继上留下的每样东西都在 `/etc/dsh-web-relay` 与 `/etc/caddy/Caddyfile` 的两个带标记的托管块里，卸载路径见 [modules/operations.md](modules/operations.md)。

@@ -93,5 +93,5 @@ publicAuthority = canonicalAuthority(vps.host) + ':' + gateway.port
 ## 已知不做
 
 - **不做"探测到 403 就静默改配置"。** 权威变化的唯一来源是用户在卡片上的输入，插件不猜。
-- **不改写 Host 来让围栏通过。** 围栏唯一信任的信号是"Host 由浏览器真实给出"；改写它等于拆掉第五层，见 [security.md](../security.md)。
+- **不改写 Host 来让围栏通过。** 围栏唯一信任的信号是"Host 由浏览器真实给出"；改写它等于拆掉第四层，见 [security.md](../security.md)。
 - **不自动把 `--trusted-host` 加到 CLI 参数里。** 插件无法影响启动命令行，且它不打算把权威变成第二个配置位置。

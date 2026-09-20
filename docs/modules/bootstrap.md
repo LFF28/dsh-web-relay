@@ -33,11 +33,7 @@
 
 **普通脚本。** 命令是 `sh`，脚本全文走 stdin。脚本里只出现非密信息。
 
-**提权脚本。** 命令是 `sudo -k -S -p '' sh`，stdin 是"口令一行 + 脚本全文"。`-S` 让 sudo 从 stdin 读口令，读完那一行后 `sh` 从 stdin 继续读脚本；`-k` 让 sudo 忽略已缓存的时间戳，因此执行形态不依赖"上一次 sudo 是否还在有效期内"；`-p ''` 把提示串置空。口令因此既不在 argv 里，也不落任何文件。设置里没给口令时改用 `sudo -n`，需要口令就会失败并如实报出。
-
-**直通 stdin。** 口令交给中继上的 `caddy hash-password` 时，命令就是它本身，stdin 是口令。中继上不留明文。
-
-管理账号是 `root`（或 `id -u` 报 0）时不走 `sudo`，脚本直接交给 `sh`。
+**提权脚本。** 命令是 `sudo -n sh`，脚本全文走 stdin。`-n` 强制非交互：账号免密时直接执行，需要口令时立即失败并报出 `sudo: a password is required`，不会挂起等一个永远不来的输入。管理账号是 `root`（或 `id -u` 报 0）时不用 `sudo`，脚本直接交给 `sh`。
 
 ## 托管块
 
@@ -54,7 +50,7 @@
 | 0 | 本地工具检查 | 只读 | 缺 `ssh` / `ssh-keygen` / `scp` 时停在这里，报出缺哪个 |
 | 1 | 生成中继密钥对 | 私钥文件存在即跳过 | 停在这里，公钥没生成 |
 | 2 | 固定中继主机密钥 | `known_hosts` 已有该主机即比对 | 指纹与用户给定值不符时停下，不建立任何后续连接 |
-| 3 | 管理连接与能力探测 | 只读 | 密钥被拒 / 不可达 / 无 sudo 时停在这里，报 `ssh` 原文 |
+| 3 | 管理连接与能力探测 | 只读 | 密钥被拒 / 不可达 / 无免密 sudo / 缺 `ss` 时停在这里，报 `ssh` 原文 |
 | 4 | 创建受限账号 `relay` | `getent passwd relay` 命中即跳过 | 停在这里，隧道账号不存在 |
 | 5 | 写 `authorized_keys` 托管块 | 块级替换 | 停在这里；已有内容不受影响 |
 | 6 | 写 `sshd` 片段并校验重载 | 块级替换 + `sshd -t` | `sshd -t` 不通过就不重载，回滚该文件 |
@@ -64,7 +60,7 @@
 | 10 | 取回 CA 根证书 | 文件已存在即跳过取回 | 停在这里；服务仍可用，只是拿不到根证书 |
 | 11 | 注册权威并自检 | 幂等赋值 | 停在这里，手机打开会 403 |
 | 12 | 拉起隧道 | 见 [tunnel.md](tunnel.md) | 停在这里，公网入口返回隧道不可达页面 |
-| 13 | 公网自检并输出书签 | 只读 | 记录里标出观察到的状态码，服务可能已可用 |
+| 13 | 公网自检并输出入口 URL | 只读 | 记录里标出观察到的状态码，服务可能已可用 |
 
 ### 0–3 建立可信连接
 
@@ -72,7 +68,9 @@
 
 此后每次调用都用 `StrictHostKeyChecking=yes`，而 `known_hosts` 里只有这一台主机，因此后续连接全部是严格校验的。
 
-探测命令读 `id -u` 与 `/etc/os-release` 的 `ID`/`VERSION_ID`，据此决定：是否走 `sudo`、包管理器是 `apt` 还是 `dnf`、`sshd` 的单元名是 `ssh` 还是 `sshd`。探测不到已知发行版时如实报告"自动安装 Caddy 仅支持 Debian/Ubuntu"，其余步骤继续。
+探测命令读 `id -u` 与 `/etc/os-release` 的 `ID`/`VERSION_ID`，并试跑 `sudo -n true` 与 `command -v ss`，据此决定：是否走 `sudo`、包管理器是 `apt` 还是 `dnf`、`sshd` 的单元名是 `ssh` 还是 `sshd`，以及转发前预检能不能在中继上跑。三者中任何一条不成立都在这里停下并报原文：密钥被拒、`sudo` 需要口令、`ss` 不在。
+
+这条探测是"插件不配置管理登录"的兑现方式——公钥登录与免密 sudo 由用户事先准备好，插件只读地确认它们成立。探测不到已知发行版时如实报告"自动安装 Caddy 仅支持 Debian/Ubuntu"，其余步骤继续。
 
 ### 4–5 受限账号与隧道公钥
 
@@ -159,7 +157,7 @@ Caddy 的本地 CA 在配置装载时就生成，根证书在 `/var/lib/caddy/.l
 
 隧道按 [tunnel.md](tunnel.md) 拉起，等它活过 `tunnel.healthyAfterMs` 再判成功。随后做一次真实公网请求：`curl -sS -o /dev/null -w '%{http_code}' https://<publicAuthority>/`，带上第 10 步取回的根证书作 `--cacert`；根证书没取到时退回 `-k` 并把这一点写进记录，因为这条证据这时只说明"链路上有人应答"，不说明对端身份。期望 401（未带网关口令）或 200（带了）。
 
-最后写完整记录、打印横幅：权威、书签 URL、CA 下载地址与指纹、隧道 PID、本次引导的步骤摘要。
+最后写完整记录、打印横幅：权威、入口 URL、CA 下载地址与指纹、隧道 PID、本次引导的步骤摘要。
 
 ## 重入与部分失败
 
@@ -171,10 +169,9 @@ Caddy 的本地 CA 在配置装载时就生成，根证书在 `/var/lib/caddy/.l
 
 | 材料 | 传输方式 | 落盘位置 |
 | --- | --- | --- |
-| `vps.password` | `sudo -S` 的 stdin，或 `caddy hash-password` 的 stdin | 只在 `settings.yaml`（`0600`） |
-| `gateway.password` | 同上，交给 `caddy hash-password` | 只在 `settings.yaml`；中继上只有 bcrypt 哈希 |
+| `gateway.password` | `caddy hash-password` 的 stdin | 只在 `settings.yaml`（`0600`）；中继上只有 bcrypt 哈希 |
 | 中继私钥 | 不传输（生成在本机） | `$DSH_HOME/dsh-web-relay/ssh/`（`0600`） |
 | 中继公钥、端口、模板文本 | 脚本 stdin 或 argv | 中继上的托管块 |
 | `gateway.sessionSecret` | 由插件生成 | `settings.yaml` 的记录命名空间（`0600`） |
 
-日志是 `scrubbedParentEnv` 之下的子进程 stderr 有界收集加上插件自己的日志行，两者都不含口令；脚本模板里也没有口令，所以即使日志级别被调高也不会漏。
+日志是 `scrubbedParentEnv` 之下的子进程 stderr 有界收集加上插件自己的日志行，两者都不含 `gateway.password`；脚本模板里也不含，所以即使日志级别被调高也不会漏。管理登录走密钥，插件手里没有可以漏的管理口令。

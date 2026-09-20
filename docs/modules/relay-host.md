@@ -17,6 +17,8 @@
 
 块外内容原样保留。插件只碰这五处，卸载后中继上不会剩别的：**没有** systemd 单元、**没有**插件代码、**没有**证书生成脚本、**没有**额外的对外服务。CA 与证书全部交给 Caddy 内置签发者（见第 3 节），所以中继上不需要 `openssl`，也不需要在两处同步证书文件。
 
+除了这五处写入，插件还会在**运行期**连进来做一次转发前预检：用 `ss` 看 `tunnel.relayPort` 是否被占，被占且持有者是本部署残留的 `sshd` 进程时以 `sudo` 杀掉它，见 [tunnel.md](tunnel.md)。它不新增文件、账号或服务，但确实要求中继上有 `ss`（iproute2）、且管理账号能免密提权——这两条因此是部署的前置条件。
+
 `deploy/fail2ban/` 里的 sshd jail **不由引导安装**（它的 `ignoreip` 依赖用户才知道的内网出口地址，写错会把隧道一起封掉）；它作为模板提供，需要时手工装，见第 5 节。
 
 托管块由同一段脚本模板写入：`awk` 过滤旧块得到临时文件，用引号定界的 heredoc 追加新块，`install` 到目标路径，写回后立刻读回比对。每一处都可重复写入，因此"重新引导"没有游标。
@@ -107,7 +109,7 @@ ss -ltnp | grep 18080        # 必须是 127.0.0.1:18080，不是 0.0.0.0:18080
 			basic_auth {
 				me <bcrypt 哈希>
 			}
-			header Set-Cookie "relay_session=<会话密钥>; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000"
+			header Set-Cookie "relay_session=<会话密钥>; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=43200"
 			import dsh-relay-upstream
 		}
 	}
@@ -115,7 +117,8 @@ ss -ltnp | grep 18080        # 必须是 127.0.0.1:18080，不是 0.0.0.0:18080
 
 - **`route` 是必需的，不是风格选择。** Caddy 的指令执行顺序由内置指令表决定，不由书写顺序决定，而 `header` 在默认顺序里排在 `basic_auth` 之前。不套 `route` 时未认证的 401 响应也会带上 `Set-Cookie`，任何人访问一次域名就能领到会话密钥并凭它绕开口令。实测确认过这条绕过路径存在，套上 `route` 后 401 上不再有 `Set-Cookie`。详见 [security.md](../security.md)。
 - `header Cookie *relay_session=...*` 两侧的 `*` 是必要的：`Cookie` 是把多个 Cookie 拼在一起的单个头字段，不加 `*` 会按整串精确匹配，只要 DSH 自己的 Cookie 也在里面就匹配不上。实测：`Cookie: dsh-auth-…=…; relay_session=…; other=1` 能匹配。
-- 会话密钥是一个静态随机串，等价于"把口令物化成一个 Cookie"。它存在记录的 `gateway.sessionSecret` 里，重新引导时默认保持不变，避免无谓地让手机重新登录。轮换路径见 [operations.md](operations.md)。
+- 会话密钥是一个静态随机串，等价于"把口令物化成一个 Cookie"。它存在记录的 `gateway.sessionSecret` 里，`gateway.password` 每次变化时一并重置，因此换口令会立刻作废所有网关会话。轮换路径见 [operations.md](operations.md)。
+- 有效期是 `Max-Age=43200`（12 小时），这就是"每次进入输一次口令"的节奏：有效期内浏览器不再询问，过期后重新询问。要改频率就改这一处的 `Max-Age`，没有别的开关。
 - 用 `SameSite=Lax` 而不是 `Strict`：DSH 自己的 Cookie 已经是 `Strict`，网关 Cookie 只需要在顶层导航时带上，`Lax` 足够且不会在从外部直接粘贴链接进入时缺失。
 - 这一层不替代 DSH 的 Cookie，只是让"WS 握手必须携带凭据"不依赖浏览器行为。DSH 的权威绑定 Cookie 仍是第二道门。实测：HTTP/1.1 的升级请求带 Basic 凭据或带会话 Cookie 都得到 `101`，不带凭据得到 `401`。
 
@@ -175,7 +178,7 @@ ss -ltnp | grep 18080        # 必须是 127.0.0.1:18080，不是 0.0.0.0:18080
 			basic_auth {
 				me @@BCRYPT_HASH@@
 			}
-			header Set-Cookie "relay_session=@@SESSION_SECRET@@; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000"
+			header Set-Cookie "relay_session=@@SESSION_SECRET@@; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=43200"
 			import dsh-relay-upstream
 		}
 	}
@@ -205,7 +208,7 @@ ss -ltnp | grep 18080        # 必须是 127.0.0.1:18080，不是 0.0.0.0:18080
 - **`tls { issuer internal { ca dsh-relay } }`**：用 `pki` 里定义的本地签发者，与其他内网站点隔离。根证书落在 `/var/lib/caddy/.local/share/caddy/pki/authorities/dsh-relay/root.crt`。
 - **`lifetime` 与 `intermediate_lifetime` 必须成对出现。** 叶子的有效期会被中间证书的上限截断：只写 `lifetime 2160h` 时实测叶子仍只有 **7 天**（Caddy 2.10 的中间证书默认有效期），加上 `intermediate_lifetime 8760h` 之后叶子才真的是 90 天。不设这一对时，未安装 CA 的客户端每 7 天要重新点一次证书警告。
 - **不写 `default_sni`。** 客户端连接 IP 字面量时不发 SNI，Caddy 按监听地址选站点；实测单站点场景下不发 SNI 也能正常握手并返回 200，多写一个 `default_sni` 只会引入一个需要与 `vps.host` 保持同步的冗余值。
-- **`request>uri query` 里两个都得打码。** `key` 是入口口令，`token` 是 DSH 的启动令牌——两者进了日志都等于泄漏。Caddy 默认把 `Cookie`、`Set-Cookie`、`Authorization` 记成 `REDACTED`，查询串不在默认范围内。实测：`/relay/enter?key=ABC&token=DEF` 记成 `key=REDACTED&token=REDACTED`。
+- **`request>uri query` 里两个字段都打码，作为兜底。** 入口不接受任何查询参数，DSH 的启动令牌也只出现在插件到本机 loopback 的那一跳里，因此当前没有任何秘密会走到这里；保留这两条替换是为了挡住将来有人把秘密重新放回查询串。Caddy 默认把 `Cookie`、`Set-Cookie`、`Authorization` 记成 `REDACTED`，查询串不在默认范围内。实测：`/relay/enter?key=ABC&token=DEF` 记成 `key=REDACTED&token=REDACTED`。
 - **删除日志里的 `X-Forwarded-For`**：前面没有 CDN 时 Caddy 的 `remote_ip` 就是真实客户端 IP，XFF 只是冗余；删掉它让 fail2ban 的规则更简单（只看 `remote_ip`）。注意这只影响**日志字段**，`reverse_proxy` 仍然给上游写一个可信的 XFF，入口路由读到的左端值仍是真实对端。实测：客户端伪造 `X-Forwarded-For: 9.9.9.9` 时上游看到的是 `127.0.0.1`。
 - **`handle_errors` + `{err.status_code} == 502`，不是 `handle_response`。** 上游连不上时 Caddy 合成的 502 不经过 `handle_response`，走的是 `handle_errors`；写成 `handle_response @down status 502` 时实测返回的是 `content-length: 0` 的空 502。这段文本同时覆盖两种情形（隧道没连上、隧道通了但内网 `dsh web` 没响应），因此措辞不写死为"隧道未连接"。
 - **尾部那个 `:@@GATEWAY_PORT@@` 兜底站点是必要的。** 站点地址做主机匹配，Host 与权威不一致的请求不进入本站点。Caddy 对"监听地址上没有站点匹配"的请求返回 **200 空响应**——不是 403、不是 404，浏览器上是一片空白。这条空白页极难归因，因此显式给一个能读懂原因的答案。实测：`Host: evil.example` 时未加兜底站点得到 200 空响应，加上后得到 421 与提示文本；兜底站点不影响已声明站点的证书签发与握手。兜底站点不带 `log` 段，因此 421 请求不进访问日志：原因已经写在页面上，而把它记进日志只会让两个站点争用同一个日志文件。
@@ -232,7 +235,7 @@ RFC 6265 第 8.3 节把这件事说得很直白：走安全信道时服务器应
 
 ### 只有一个 HTTP 入口
 
-中继上对外只有 `gateway.port` 一个 HTTP 服务端口（另有管理用的 `sshd`，它不解析 Cookie）。除了缩小攻击面，这里还有一条 Cookie 层面的理由：RFC 6265 第 8.5 节说明**Cookie 不按端口隔离**，同一台主机另一个端口上的服务既读得到也写得到同一个 Cookie。DSH 的 Cookie 名只由权威的 host 决定、不带端口信息，所以中继上只要多开一个能吃 Cookie 的服务端口——明文 HTTP 的，或另一个 HTTPS 站点——它就可能拿到一个能通过第四层校验的会话 Cookie。封掉这条路只能靠"不存在第二个端口"，这一条不设配置项。
+中继上对外只有 `gateway.port` 一个 HTTP 服务端口（另有管理用的 `sshd`，它不解析 Cookie）。除了缩小攻击面，这里还有一条 Cookie 层面的理由：RFC 6265 第 8.5 节说明**Cookie 不按端口隔离**，同一台主机另一个端口上的服务既读得到也写得到同一个 Cookie。DSH 的 Cookie 名只由权威的 host 决定、不带端口信息，所以中继上只要多开一个能吃 Cookie 的服务端口——明文 HTTP 的，或另一个 HTTPS 站点——它就可能拿到一个能通过第三层校验的会话 Cookie。封掉这条路只能靠"不存在第二个端口"，这一条不设配置项。
 
 因此不写 `http://` 站点块，不做 80→8443 跳转，也不为任何别的用途在中继上新增监听。IP 字面量下 HSTS 不可用（RFC 6797 排除 IP 字面量），明文入口没有浏览器侧的兜底：DSH 的 Cookie 虽然现在带上了 `Secure`，但那是中继补的，而明文端口上的服务根本不经过 Caddy，也就绕过了这次改写。
 
@@ -251,7 +254,7 @@ RFC 6265 第 8.3 节把这件事说得很直白：走安全信道时服务器应
 
 **不要开放 18080。** 它只应在 loopback 上，由 `sshd` 绑定、由 Caddy 连接。检查方法见上面的 `ss -ltnp`。
 
-**对外只应有一个 HTTP 端口。** `ss -ltnp` 里除 `gateway.port` 与 `sshd` 之外的任何监听都要问清来路：多一个能吃 Cookie 的端口就多一条绕开第四层的路，理由见第 3 节的"只有一个 HTTP 入口"。插件只在 Caddyfile 里写两个站点，两者共用 `gateway.port`。
+**对外只应有一个 HTTP 端口。** `ss -ltnp` 里除 `gateway.port` 与 `sshd` 之外的任何监听都要问清来路：多一个能吃 Cookie 的端口就多一条绕开第三层的路，理由见第 3 节的"只有一个 HTTP 入口"。插件只在 Caddyfile 里写两个站点，两者共用 `gateway.port`。
 
 中继所在的云厂商安全组与主机防火墙都是**中继管理员**的职责，插件不改（改防火墙有把管理连接一起关掉的现实风险）。因此它是"必须成立的前置条件"之一，见 [security.md](../security.md)。
 
@@ -323,7 +326,7 @@ bantime  = 3600
 - Caddy 侧的 jail 由引导安装（第 7 步的一部分），因为它的 `logpath` 与 `port` 与 Caddyfile 出自同一份模板，手工同步容易错位。sshd 侧的 jail 不自动安装：它的 `ignoreip` 依赖用户才知道的内网出口地址，写错会连同隧道一起封掉，因此只作为模板提供。这两类文件的所有权约定（托管块、整文件标记）见 [deploy/README.md](../../deploy/README.md)。
 - fail2ban 的封禁动作默认走 iptables；中继上只有 `nft` 而没有 `iptables` 兼容层时，要在 `[DEFAULTS]` 里把 `banaction` 换成 `nftables-multiport`，否则 jail 会启动但一条规则都装不上。
 
-入口口令 `/relay/enter` 一旦泄漏，攻击者仍要过这一层，因此爆破在这一层就被挡住，不会打到内网主机。
+网关口令是这条通路上唯一可猜的凭据，爆破在这一层就被挡住，不会打到内网主机。
 
 ## 6. 明确禁止
 
@@ -335,6 +338,7 @@ bantime  = 3600
 6. **不配置 `trusted_proxies`。** 前面没有别的代理；配置它会引入 XFF 伪造面。
 7. **不把 CA 私钥复制出来。** 根证书只有公钥，可以公开分发；私钥留在 Caddy 的数据目录里。
 8. **不让插件改防火墙与全局 sshd 认证策略。** 这两处的错误会把管理员锁在门外。
+9. **不让转发前预检做第二件事。** 它只查 `tunnel.relayPort`、只杀属主为 `relay` 的 `sshd` 进程。"顺手重启 Caddy""顺手清日志"之类的动作都不属于它——这是整份设计里唯一一处运行期提权，面越窄越好。
 
 ## 7. 部署后自检清单
 

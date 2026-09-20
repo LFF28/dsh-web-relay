@@ -20,10 +20,11 @@
 | --- | --- | --- |
 | 中继地址、SSH 端口、账号 | `web-relay` 的 `vps.host` / `vps.port` / `vps.user` | `Deployment` 不齐全时不启动隧道 |
 | 管理账号私钥 | `web-relay` 的 `vps.identityFile` | 留空则走系统身份解析（`~/.ssh/config`、默认私钥、agent） |
+| 转发前预检的连接身份 | 同上的 `vps.host` / `vps.port` / `vps.user` / `vps.identityFile` | `Deployment` 不齐全时跳过预检，直接 spawn |
 | 远端端点端口 | 包内 `tunnel.relayPort`（默认 `18080`） | 有默认值，必须与中继的 `permitlisten` 与 Caddy 上游一致 |
 | 重连退避、健康阈值、拆除宽限 | 包内 `tunnel.*` | 见 [configuration.md](../configuration.md) |
 
-隧道用的是**中继专用账号**与**本机专用私钥**（引导第 0–1 步生成在 `$DSH_HOME/dsh-web-relay/ssh/relay_ed25519`，`0600`），不是 `vps.user` 的管理凭据。管理凭据只在引导期间使用，隧道与它无关——隧道因此能在管理口令换掉、或管理账号被禁用之后继续工作。
+隧道本身用的是**中继专用账号**与**本机专用私钥**（引导第 0–1 步生成在 `$DSH_HOME/dsh-web-relay/ssh/relay_ed25519`，`0600`），不是 `vps.user` 的管理身份。但这条通路还有一处用到管理身份：转发前预检要用 `vps.user` 的密钥连上中继跑一条只读检查（见下）。因此"管理账号被撤销不影响隧道"只剩一半成立——端口空闲时隧道照旧建立，只有从端口残留里恢复才需要它。
 
 ## 子进程规格
 
@@ -58,23 +59,50 @@ ssh
 - `env` 在指定了 `vps.identityFile` 时写一项 `{ SSH_AUTH_SOCK: undefined }`。这一项是必要的：seam 会用 `scrubbedParentEnv()` 先清洗父环境，它剥掉名字匹配 `/KEY|PASSWORD|SECRET|TOKEN/i` 的项和全部 `DSH_*`，但保留 `SSH_AUTH_SOCK`；不删掉它，`ssh` 仍可能从 ssh-agent 取到别的钥匙。`undefined` 是该 seam 定义的"删除一个环境变量"（墓碑值），不是"没设置"。留空 `vps.identityFile` 时不写这一项——那时 agent 正是我们要用的身份来源。
 - `tunnel.extraOptions`（`Record<string, string>`）追加成额外的 `-o key=value`。键与上表冲突时以上表为准：`BatchMode`、`StrictHostKeyChecking`、`UserKnownHostsFile`、`ExitOnForwardFailure`、`ConnectTimeout` 这几项是安全与可用性的前提，不允许被覆盖。
 
+## 转发前预检
+
+`sshd` 为 `-R` 绑的监听端点属于**中继上处理那次连接的会话子进程**。主机侧异常中断（断电、休眠、网络切换、NAT 重绑定）不发出 FIN，中继察觉不到对端已经消失，那个子进程会继续占着 `127.0.0.1:<relayPort>`。默认配置下这个窗口最长约 2 小时 11 分（`ClientAliveInterval` 默认 0，只剩内核 keepalive：`tcp_keepalive_time` 加上 `tcp_keepalive_probes × tcp_keepalive_intvl`），期间任何新的 `-R` 都在服务端以 `bind: Address already in use` 失败，客户端因 `ExitOnForwardFailure=yes` 退出并进入退避。
+
+因此每轮 spawn 之前先做一次预检，把端口腾出来：
+
+```
+1. 用 vps.* 的身份连中继，运行 ss -ltnH 'sport = :<relayPort>'
+2. 输出为空              → 端口空闲，直接 spawn
+3. 输出非空              → 取出持有者 pid，核对它是 sshd 且属主是 relay
+4. 核对通过              → sudo kill，轮询（上限 2 秒）到端口消失，再 spawn
+5. 核对不通过，或预检本身出错 → 不动手，记录原因，照常 spawn
+```
+
+预检连接复用隧道的 SSH 参数（`BatchMode=yes`、`StrictHostKeyChecking=yes`、同一个 `knownHostsFile`、`ConnectTimeout`），只把身份从 `relay` 换成 `vps.user`。
+
+第 1 步不需要特权：`ss -ltn` 对任何用户都列出全部监听端点，只有 `-p` 才需要权限，另一个用户的进程在 `-p` 下不显示。提权只发生在第 4 步，也就是端口确实被占、且持有者核对通过的时候——正常重连不碰 `sudo`。
+
+**为什么杀它是安全的。** 按 [security.md](../security.md) 的前提，能建立反向转发的只有内网主机那把公钥，所以这个端口上的 `sshd` 端点只可能来自本部署的旧会话。预检不把这个推论当结论，而是逐条核对持有者：`/proc/<pid>/exe` 必须指向 sshd，进程属主必须是 `relay`。两条有一条不成立就停手——那个端口上可能是别的东西，杀掉它属于越界。这道核对限制的是**插件的失误**，不是被入侵的内网主机：那台主机本来就持有 `vps.identityFile` 与中继上的免密 `sudo` 权限，见 [security.md](../security.md) 的"中继侧的最小权限"。
+
+**预检失败不是致命错误。** 它是一次修复，不是一道门。管理身份不可用（密钥被撤销、账号被禁用、`sudo` 需要口令、`ss` 没装）时预检记录原因后跳过，spawn 照常进行：端口空闲时隧道照旧建立，端口被占时按原有方式失败。这样"端口空闲"这条常见路径不依赖管理身份。
+
+**不做开关。** 预检只在端口确实被占时动手，且只认"sshd + `relay` 属主"这一种持有者，因此不提供配置项；关掉它只会让残留退回人工清理，见 [operations.md](operations.md)。
+
+远程命令是一段固定的 POSIX shell 片段，`tunnel.relayPort` 是里面唯一的变量，且在校验为 1–65535 的整数之后才拼进去，不做字符串拼接。
+
 ## 状态机
 
 | 当前状态 | 事件 | 下一状态 | 动作 |
 | --- | --- | --- | --- |
-| — | `apply` 返回 | `starting` | 立即 spawn 第一个子进程 |
+| — | `apply` 返回 | `starting` | 立即开始第一轮：转发前预检，然后 spawn |
+| `starting` | 预检结束（空闲、已释放或跳过） | `starting` | 写 `lastPreflight`，继续 spawn |
 | `starting` | spawn 成功 | `running` | 记录 `since`；启动健康计时 |
 | `starting` | spawn 同步抛错 | `backing-off` | 记录退出摘要；取退避序列下一项 |
 | `running` | `done` 解析（非 0 或信号） | `backing-off` | 记录 `exitCode`/`signal`/stderr 尾部 |
 | `running` | 存活超过 `tunnel.healthyAfterMs` | `running` | 退避序列复位到第一项；`connectedCount++` |
-| `backing-off` | 退避计时到 | `starting` | 重新 spawn |
+| `backing-off` | 退避计时到 | `starting` | 重新预检并 spawn |
 | `starting` / `running` / `backing-off` | fiber 释放 | `stopping` → `stopped` | 见下"生命周期与释放"；不再重试 |
 
-- **单实例**：任何时刻最多一个 `ssh` 子进程。每次重连前必须确认旧句柄已经 `done`，不允许叠加。
+- **单实例**：任何时刻最多一个隧道子进程，预检子进程与它串行、不并发。每轮开始前必须确认上一轮的句柄都已经 `done`，不允许叠加。
 - **`starting` 的两种失败**：`spawn()` 同步抛错（例如 `cwd` 无效），或子进程立刻以非 0 退出（认证失败、端口被占）。两者都进入 `backing-off`。
 - **退避**：`tunnel.backoffMs` 默认 `[1000, 2000, 5000, 15000, 30000]`，用尽后停在最后一项。稳定的失败（配置错、公钥不在中继上）会以 30s 周期重试并把 stderr 打出来，一眼可见且不刷屏。
 - **健康判据**：仅凭"进程还活着"不足够，因为 `ssh -N -R` 在转发建立后会长期存活——这没问题，`ExitOnForwardFailure=yes` 已经保证"转发没成功就退出"。因此"存活超过 `tunnel.healthyAfterMs`"作为重置退避的信号。这个判据是启发式的，所以退避序列必须有小起点（1s），不能一上来就 30s。
-- **首轮不等退避**：参数齐全时立即 spawn，不延迟。启动自检需要一个已经在走的隧道。
+- **首轮不等退避**：参数齐全时立即开始第一轮（预检 → spawn），不延迟。启动自检需要一个已经在走的隧道。
 
 ## 什么时候起、什么时候停
 
@@ -84,7 +112,7 @@ ssh
 | `Deployment` 齐全，引导尚未成功 | 引导第 12 步起隧道 |
 | 引导已是 `ready`，`tunnel.autoStart` 为真 | 启动时直接起隧道 |
 | `tunnel.autoStart` 置为 `false` | 停隧道，且不再自动拉起；公网入口返回隧道不可达页面 |
-| `vps.host` / `vps.port` / `vps.user` / `vps.identityFile` 变化 | 停掉旧子进程，用新参数重新起（不需要重启 profile） |
+| `vps.host` / `vps.port` / `vps.user` / `vps.identityFile` 变化 | 停掉旧子进程，用新参数重新起（不需要重启 profile）；新凭据同时用于预检 |
 | `ctx.webServer` 的端口变化 | 同上；端口只在 DSH 重启时才会变，实际等于一起重启 |
 
 ## 生命周期与释放
@@ -94,28 +122,30 @@ ssh
 ```ts
 ctx.effect(() => {
   const setupAbort = new AbortController()          // 只关"启动/重连"这条线
-  let child: SubprocessHandle | undefined
+  let child: SubprocessHandle | undefined           // 隧道子进程
+  let preflight: SubprocessHandle | undefined       // 预检子进程
   let stopped = false
 
-  const loop = async () => { /* 退避 → spawn → await done → 循环 */ }
-  const run = loop()                                 // 首轮同步 spawn，不 await；释放路径负责收敛
+  const loop = async () => { /* 退避 → 预检 → spawn → await done → 循环 */ }
+  const run = loop()                                 // 首轮同步起预检，不 await；释放路径负责收敛
 
   return async () => {
     stopped = true
     setupAbort.abort()                               // 1. 先让重连循环停止产生新子进程
-    const handle = child
-    if (handle) {
-      handle.terminate()                             // 2. 再终止活着的子进程
-      await handle.done.catch(() => {})              // 3. 等到它真的结束
+    for (const handle of [preflight, child]) {
+      if (handle) {
+        handle.terminate()                           // 2. 再终止活着的子进程
+        await handle.done.catch(() => {})            // 3. 等到它真的结束
+      }
     }
     await run.catch(() => {})                        // 4. 等循环自身落到终态
   }
 })
 ```
 
-`ctx.effect` 的回调在注册时立即执行，`loop()` 的第一轮在第一个 `await` 之前同步跑到 `spawn()`，因此 `apply` 返回时隧道已经在建立，无需把 `apply` 变成异步。循环体内部的每次重试都由 `setupAbort` 与 `stopped` 守卫。
+`ctx.effect` 的回调在注册时立即执行，`loop()` 的第一轮在第一个 `await` 之前同步跑到预检连接的 `spawn()`，因此 `apply` 返回时预检已经在跑，无需把 `apply` 变成异步。循环体内部的每次重试都由 `setupAbort` 与 `stopped` 守卫。
 
-顺序是有要求的：先关掉"会产生新子进程"的那条线，再杀已有的，最后等所有 await 落地。反过来的话，循环可能在杀进程与等 `done` 之间又 spawn 一个新的，那个子进程将不属于任何人的清理范围。
+顺序是有要求的：先关掉"会产生新子进程"的那条线，再杀已有的，最后等所有 await 落地。反过来的话，循环可能在杀进程与等 `done` 之间又起一个新的，那个子进程将不属于任何人的清理范围。两种子进程都要走这一遍：预检可能停在 `ss` 的输出上，隧道可能停在转发上，各自都要等到 `done` 才算拆除完成。
 
 `graceMs` 用尽后 seam 会升级到 `SIGKILL`；`await done` 仍然会解析（`done` 只在 spawn 或 provider 层失败时 reject）。
 
@@ -129,9 +159,16 @@ ctx.effect(() => {
 - **不转储到文件**，也不把 stderr 塞进 `status()` 的返回结构体内（它可能包含主机路径）。日志一行摘要足够定位。
 - 启动横幅里同时打印一次人类可读的复现命令（把 `argv` 原样拼出来），让操作者能手工跑一次看到完整输出。
 
-### `ExitOnForwardFailure=yes` 会掩盖的一类问题
+### 转发失败怎么分辨原因
 
-转发成功但"中继上的目标端口已经有人占了"会在服务端拒绝，客户端退出并打印 `remote port forwarding failed for listen port <relayPort>`。这类问题靠日志识别；主动探测推迟到 v1.1，见 [roadmap.md](../roadmap.md)。
+`permitlisten` 被拒与端口被占在客户端产生**同一条**消息：两者都是服务端的 `SSH2_MSG_REQUEST_FAILURE`，`ExitOnForwardFailure=yes` 把它变成 `remote port forwarding failed for listen port <relayPort>` 并让客户端退出。区分只看中继侧的 `sshd` 日志：
+
+| 原因 | 中继 `sshd` 日志 | 预检能否修复 |
+| --- | --- | --- |
+| 端口被残留会话占着 | `bind [127.0.0.1]:<port>: Address already in use` | 能，这正是预检存在的理由 |
+| `permitlisten` 与 `tunnel.relayPort` 不一致 | `Received request from <ip> port <p> to remote forward, but the request was denied.` | 不能，属于配置错 |
+
+第二种会一直失败到配置被改正——这是有意的，改配置是引导步骤的职责，不该由隧道守护在运行期猜。
 
 ## `status()`
 
@@ -145,6 +182,13 @@ export interface RelayStatus {
   connectedCount: number
   /** 最近一次退出的退出码与 stderr 摘要；从未退出时为 undefined。 */
   lastExit?: { exitCode: number | null; signal: string | null; message: string }
+  /** 最近一次转发前预检的结果；从未运行时为 undefined。 */
+  lastPreflight?: {
+    /** `free` 空闲；`released` 杀掉了残留；`skipped` 预检没跑成；`refused` 被占但不是本部署的残留。 */
+    outcome: 'free' | 'released' | 'skipped' | 'refused'
+    /** `skipped` 与 `refused` 的原因原文。 */
+    message?: string
+  }
 }
 ```
 

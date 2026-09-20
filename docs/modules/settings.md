@@ -1,6 +1,6 @@
 # 设置命名空间与客户端卡片
 
-插件把部署参数放在 settings 里，而不是放在 `cordis.patch.yml` 里。理由是这些值有写入者、生命周期、保密级别三个属性都对不上 patch：它们由用户填写、在运行期变化、其中两个是口令。
+插件把部署参数放在 settings 里，而不是放在 `cordis.patch.yml` 里。理由是这些值有写入者、生命周期、保密级别三个属性都对不上 patch：它们由用户填写、在运行期变化、其中一个是口令。
 
 ## 两个命名空间
 
@@ -36,7 +36,7 @@ ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
 
 **表单。** 卡片自己暂存草稿，只在用户点保存时写一次。每次设置写入都是一次带修订号栅栏的持久文档变更，逐字段提交会把一次编辑变成用户没要求也无法预览的多次写入。口令字段没有可回填的值（凭据不回传），所以草稿初始为空，空草稿不写任何东西，控件显示"已设置 / 未设置"。
 
-**状态区。** 卡片用 `web-relay-record` 渲染：状态、权威、书签、CA 下载地址与指纹、逐步引导结果、最近一次错误。状态区是只读的。
+**状态区。** 卡片用 `web-relay-record` 渲染：状态、权威、入口 URL、CA 下载地址与指纹、逐步引导结果、最近一次错误、最近一次转发前预检。状态区是只读的。
 
 **按钮。**
 
@@ -45,15 +45,16 @@ ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
 | 保存 | 写 `web-relay`；插件在 `onChange` 里规范化并重新引导受影响的步骤 |
 | 重新引导 | 把 `bootstrapRequest` 加一后保存 |
 | 重新拉起隧道 | 把 `tunnel.autoStart` 写为真；隧道守护会立即重连 |
-| 轮换书签 | 把 `entryRotateRequest` 加一后保存；插件生成新的 `entryKey` 并更新记录 |
 
 ## 密钥处理
 
-`vps.password` 与 `gateway.password` 用 `z.string().role('secret')` 声明。设置描述符在 `redactSecrets` 下把这两个字段整体移出 `value`/`base`/`user`，改放进 `secrets` 列表，只报"在哪些路径上已设置"。于是：
+`gateway.password` 用 `z.string().role('secret')` 声明。设置描述符在 `redactSecrets` 下把这个字段整体移出 `value`/`base`/`user`，改放进 `secrets` 列表，只报"在哪些路径上已设置"。于是：
 
 - 口令值从不进入发给浏览器的响应，卡片无法显示也无法回填它。
 - 口令值仍以明文存在 `$DSH_HOME/settings.yaml`（`0600`）。这是选择"用户自填口令"的必然结果，写在这里以免被误认为已加密。
-- 引导时明文只出现在两处：交给 `sudo -S` 的 stdin，和交给中继上 `caddy hash-password` 的 stdin。它不出现在任何命令行参数、日志、记录或临时文件里。
+- 引导时明文只出现在一处：交给中继上 `caddy hash-password` 的 stdin。它不出现在任何命令行参数、日志、记录或临时文件里。
+
+管理账号不走口令：公钥登录与免密 sudo 是用户事先准备好的前提，插件不存管理口令，见 [configuration.md](../configuration.md) 的"配置前的前提"。
 
 `vps.identityFile` 指向管理账号私钥。插件只把它拼进 `-i`，不读取、不复制、不改权限；文件权限不对时 `ssh` 自己会拒绝，插件只把原始错误转述出来。
 
@@ -64,7 +65,7 @@ DSH 的客户端在非 loopback 页面上把设置持久化降级为内存，`se
 - 卡片在服务器本机的 `http://127.0.0.1:<port>` 页面上可用。
 - 通过中继打开的手机页面上，卡片只读，保存按钮不可用。
 
-这不是插件可以绕过的限制，而是流程的一部分：**首次配置与所有重新引导都在服务器本机做**，远程只需用书签加网关口令进入。列出全部"必须本地完成的操作"的地方是 [operations.md](operations.md)。
+这不是插件可以绕过的限制，而是流程的一部分：**首次配置与所有重新引导都在服务器本机做**，远程只需打开入口 URL 并输入网关口令。列出全部"必须本地完成的操作"的地方是 [operations.md](operations.md)。
 
 首次配置只能在本机做还有一层便利：此时权威尚未注册，手机根本还开不了那个页面。
 
