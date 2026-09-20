@@ -146,8 +146,23 @@ ss -ltnp | grep 18080        # 必须是 127.0.0.1:18080，不是 0.0.0.0:18080
 }
 
 (dsh-relay-upstream) {
+	@noDsh {
+		method GET
+		header Accept *text/html*
+		not header Cookie *dsh-auth-*
+	}
+	rewrite @noDsh /relay/enter
 	reverse_proxy 127.0.0.1:@@RELAY_PORT@@ {
 		header_down Set-Cookie "$" "; Secure"
+		@unauth status 401
+		handle_response @unauth {
+			@doc {
+				method GET
+				header Accept *text/html*
+			}
+			redir @doc /relay/enter 302
+			copy_response
+		}
 		stream_timeout 24h
 		stream_close_delay 5m
 	}
@@ -218,6 +233,9 @@ ss -ltnp | grep 18080        # 必须是 127.0.0.1:18080，不是 0.0.0.0:18080
 - **删除日志里的 `X-Forwarded-For`**：前面没有 CDN 时 Caddy 的 `remote_ip` 就是真实客户端 IP，XFF 只是冗余；删掉它让 fail2ban 的规则更简单（只看 `remote_ip`）。注意这只影响**日志字段**，`reverse_proxy` 仍然给上游写一个可信的 XFF，入口路由读到的左端值仍是真实对端。实测：客户端伪造 `X-Forwarded-For: 9.9.9.9` 时上游看到的是 `127.0.0.1`。
 - **日志轮转显式设小。** `/var/log/caddy/dsh-relay-access.log` 以 `mode 0600`、`roll_size 20MiB`、`roll_keep 5` 写入：Caddy 的默认值是 100MiB × 10 个文件，对小磁盘的中继太大。
 - **`handle_errors` + `{err.status_code} == 502`，不是 `handle_response`。** 上游连不上时 Caddy 合成的 502 不经过 `handle_response`，走的是 `handle_errors`；写成 `handle_response @down status 502` 时实测返回的是 `content-length: 0` 的空 502。这段文本同时覆盖两种情形（隧道没连上、隧道通了但内网 `dsh web` 没响应），因此措辞不写死为"隧道未连接"。
+- **`@noDsh` 改写把裸地址的首次访问带进换票点。** 没有 DSH 会话 Cookie 的文档导航（`Accept` 带 `text/html`）在服务端被改写成 `/relay/enter`，地址栏里因此始终只有裸权威。`rewrite` 不需要 `route` 包一层：内置指令顺序表里它排在 `reverse_proxy` 之前，`caddy adapt` 产出的处理器顺序就是 `rewrite`、`reverse_proxy`。`not header Cookie *dsh-auth-*` 让已经登录的请求不被改写——没有这条判据就会每次取界面都换一次票。`not` 写在字段名前而不是在值上写 `!`：Caddyfile 文档里 `!` 的用法是"字段不存在"，值上的取反没有文档。
+- **`@unauth` 恢复跳转处理"Cookie 在但已失效"。** 那种请求不会被改写，上游回 `401`；只有文档导航该被送回换票点，所以判据拆成两层：`handle_response` 自己的匹配器是**响应**匹配器（`status 401`），写在它里面的 `@doc` 是请求匹配器（`GET` + `Accept: text/html`）。其余 `401`（例如 `/api`）走 `copy_response` 原样透传。实测：失效 Cookie + `Accept: text/html` 得到 `302`/`location: /relay/enter`，跟完两跳回到 `200`；`/api/` + `Accept: application/json` 得到 `401` 与 DSH 原文 `unauthorized`。
+- **`copy_response` 是那个不透传之外的出口。** `handle_response` 的块必须给出响应，`copy_response` 就是"把上游那条 401 原样写回去"；漏了它时非文档导航的 401 会变成空响应。
 - **尾部那个 `:@@GATEWAY_PORT@@` 兜底站点是必要的。** 站点地址做主机匹配，Host 与权威不一致的请求不进入本站点。Caddy 对"监听地址上没有站点匹配"的请求返回 **200 空响应**——不是 403、不是 404，浏览器上是一片空白。这条空白页极难归因，因此显式给一个能读懂原因的答案。实测：`Host: evil.example` 时未加兜底站点得到 200 空响应，加上后得到 421 与提示文本；兜底站点不影响已声明站点的证书签发与握手。兜底站点不带 `log` 段，因此 421 请求不进访问日志：原因已经写在页面上，而把它记进日志只会让两个站点争用同一个日志文件。
 - **`stream_timeout 24h`**：给长连接一个上限，避免陈旧连接永久占用；客户端会在被切断后自动重连。
 - **上游写成一个具名片段 `(dsh-relay-upstream)`，两个分支各 `import` 一次。** 两个分支必须给出完全相同的响应，重复一份 `reverse_proxy` 时最容易在改动里只动一处；`caddy validate` 对这两条路径不做交叉检查。
@@ -359,11 +377,19 @@ ss -ltnp | grep -E '18080|8443'         # 18080 必须是 127.0.0.1
 ss -ltnp                                # 对外只应有 8443 与 sshd；出现 :80 说明发行版自带的站点还没删，见第 3 节
 sshd -T -C user=relay,host=relay,addr=127.0.0.1 | grep -iE 'gatewayports|permitopen|allowtcpforwarding|permittty|clientaliveinterval|clientalivecountmax|unusedconnectiontimeout'
 
-# 未认证：期望 401，且响应里没有 set-cookie
+# 未认证且不是文档导航：期望 401，且响应里没有 set-cookie
 curl -sS --cacert <ca> -D- -o /dev/null https://<authority>/ | grep -iE '^HTTP|^set-cookie'
 
-# 认证成功：期望 200 或 502；两条 Cookie 都在，且都带 Secure
-curl -sS --cacert <ca> -u me:<pw> -D- -o /dev/null https://<authority>/ | grep -iE '^HTTP|^set-cookie'
+# 首访：裸地址 + 文档导航的 Accept，未带任何 Cookie
+# 期望 303、location: /、两条 Cookie（relay_session 与 dsh-auth-…）都带 Secure
+# -c/-b 是必需的：curl 默认不保存 Cookie，不带上它跟跳转会一直绕到 max-redirs
+curl -sS --cacert <ca> -u me:<pw> -c <jar> -b <jar> -H 'Accept: text/html' -D- -o /dev/null https://<authority>/ | grep -iE '^HTTP|^location|^set-cookie'
+
+# 带着刚拿到的 Cookie 再取一次：期望 200，且响应体里有 __DSH_BOOT__
+curl -sS --cacert <ca> -u me:<pw> -c <jar> -b <jar> -H 'Accept: text/html' https://<authority>/ | grep -c __DSH_BOOT__
+
+# 失效 Cookie 的恢复路径：改坏 dsh-auth-… 的值后跟跳转，期望两跳后 200
+curl -sS --cacert <ca> -u me:<pw> -c <jar> -b <jar> -L -H 'Accept: text/html' https://<authority>/
 
 # 隧道未连接：期望 502 且带可读提示，不是空响应
 curl -sS --cacert <ca> -u me:<pw> https://<authority>/
@@ -375,8 +401,9 @@ curl -sS -o /dev/null -w '%{http_code}\n' --max-time 3 http://<authority>/
 三条必查项：
 
 1. **未认证请求不得带 `set-cookie`。** 带上就说明 `handle` 段漏了 `route`，任何人都能领到会话密钥并绕开口令。这是整份清单里最容易在改动中被破坏、又最不显眼的一条。
-2. **认证成功后必须带 `relay_session`。** 缺它时 WebSocket 握手会失败，而普通请求看起来一切正常。
-3. **认证成功后每条 `set-cookie` 都要带 `Secure`**，包括 DSH 自己那条 `dsh-auth-…`。缺它就说明 `header_down` 那一行掉了或落到了别处；`dsh-auth-…` 被追加成 `Secure; Secure` 不改变行为（重复的布尔属性浏览器忽略），但说明改写被换成了会重复追加的写法。
+2. **首访必须被带到换票点。** 第 4 条命令拿到 `303`、`location: /` 才算这条设计成立；拿到 `401` 说明中继上的 Caddyfile 还是旧版（没有 `@noDsh` 改写），重新引导一次。引导第 13 步的自检会自己走完这三跳，失败时直接写在步骤说明里。
+3. **认证成功后必须带 `relay_session`。** 缺它时 WebSocket 握手会失败，而普通请求看起来一切正常。
+4. **认证成功后每条 `set-cookie` 都要带 `Secure`**，包括 DSH 自己那条 `dsh-auth-…`。缺它就说明 `header_down` 那一行掉了或落到了别处；`dsh-auth-…` 被追加成 `Secure; Secure` 不改变行为（重复的布尔属性浏览器忽略），但说明改写被换成了会重复追加的写法。这一条同样由第 13 步盯着。
 
 另外核对一次证书链与有效期，确认 90 天的覆盖真的生效（少了 `intermediate_lifetime` 时这里会显示 7 天）：
 

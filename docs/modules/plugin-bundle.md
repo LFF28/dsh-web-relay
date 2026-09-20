@@ -16,7 +16,7 @@ dsh-web-relay/
 │   ├── bootstrap.ts      # 自动引导，见 modules/bootstrap.md
 │   ├── trust.ts          # 权威注册与启动自检，见 modules/trust.md
 │   ├── tunnel.ts         # SSH 反向隧道守护，见 modules/tunnel.md
-│   ├── entry.ts          # /relay/enter，见 modules/entry.md
+│   ├── entry.ts          # 换票点 /relay/enter，见 modules/entry.md
 │   └── client/           # 浏览器半边：一张设置卡片
 ├── deploy/               # 引导写入中继的配置模板
 └── docs/                 # 本目录
@@ -155,7 +155,7 @@ export interface WebRelayHandle {
 
 1. 读 `ctx.webServer.port` 与 `ctx.webServer.host`：前者是隧道目标端口，后者用于启动自检判断"是否只绑在 loopback"。
 2. 同步 `provide('webRelay', ...)`。此时 settings 尚未读取，`authority()` 返回 `undefined`，`trustedHosts` 为空数组。
-3. 注册 `/relay/enter` 一条精确路由（`entry.enabled` 为真时）。
+3. 注册 `/relay/enter` 一条精确路由（换票点；`entry.enabled` 为假时它回 `403` 说明，路由仍在）。
 4. 在 `ctx.inject(['settings'], ...)` 回调里注册两个命名空间并读取当前值。settings 在更早的基础层行里就绪，该回调同步执行，因此**已保存的权威在第 2 步之后的同一轮里就可用**。
 5. settings 变化时重新计算权威；结果变了就重解析 `connection` 行（见上）。
 6. 部署参数齐全且 `tunnel.autoStart` 为真时启动引导与隧道；`Deployment` 不齐全时什么都不做，记录里显示等待配置。

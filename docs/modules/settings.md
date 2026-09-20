@@ -40,7 +40,7 @@ ctx.slots.inject('plugins.item', () => ctx.slots.register({
 
 **表单。** 卡片自己暂存草稿，只在用户点保存时写一次。每次设置写入都是一次带修订号栅栏的持久文档变更，逐字段提交会把一次编辑变成用户没要求也无法预览的多次写入。口令字段没有可回填的值（凭据不回传），所以草稿初始为空，空草稿不写任何东西，控件显示"已设置 / 未设置"。
 
-**状态区。** 卡片用 `web-relay-record` 渲染：状态、权威、入口 URL、CA 指纹、逐步引导结果、最近一次错误、最近一次转发前预检。记录的 `state` 取 `unconfigured`、`bootstrapping`、`ready`、`failed` 之一，`tunnelState` 取 `stopped`、`starting`、`running`、`backing-off` 之一；卡片的隧道状态直接读这一条记录，不走宿主 RPC。状态区是只读的。
+**状态区。** 卡片用 `web-relay-record` 渲染：状态、权威、访问地址、CA 指纹、逐步引导结果、最近一次错误、最近一次转发前预检。记录的 `state` 取 `unconfigured`、`bootstrapping`、`ready`、`failed` 之一，`tunnelState` 取 `stopped`、`starting`、`running`、`backing-off` 之一；卡片的隧道状态直接读这一条记录，不走宿主 RPC。状态区是只读的。
 
 **按钮。**
 
@@ -69,7 +69,7 @@ DSH 的客户端在非 loopback 页面上把设置持久化降级为内存，`se
 - 卡片在服务器本机的 `http://127.0.0.1:<port>` 页面上可用。
 - 通过中继打开的手机页面上，卡片只读，保存按钮不可用。
 
-这不是插件可以绕过的限制，而是流程的一部分：**首次配置与所有重新引导都在服务器本机做**，远程只需打开入口 URL 并输入网关口令。列出全部"必须本地完成的操作"的地方是 [operations.md](operations.md)。
+这不是插件可以绕过的限制，而是流程的一部分：**首次配置与所有重新引导都在服务器本机做**，远程只需打开访问地址并输入网关口令。列出全部"必须本地完成的操作"的地方是 [operations.md](operations.md)。
 
 首次配置只能在本机做还有一层便利：此时权威尚未注册，手机根本还开不了那个页面。
 

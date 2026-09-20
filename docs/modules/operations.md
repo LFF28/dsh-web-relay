@@ -6,8 +6,8 @@
 
 | 观测点 | 位置 | 内容 |
 | --- | --- | --- |
-| 设置卡片状态区 | 服务器本机浏览器 | 引导状态、权威、入口 URL、CA 指纹、逐步引导结果、最近一次错误、最近一次转发前预检 |
-| 启动横幅 | 内网主机 `dsh web` 终端 stdout | `dsh-web-relay: https://…/relay/enter` 一行与 CA 指纹；其余状态在 harness 日志与 `web-relay-record` 记录里 |
+| 设置卡片状态区 | 服务器本机浏览器 | 引导状态、权威、访问地址、CA 指纹、逐步引导结果、最近一次错误、最近一次转发前预检 |
+| 启动横幅 | 内网主机 `dsh web` 终端 stdout | `dsh-web-relay: https://…/` 一行与 CA 指纹；其余状态在 harness 日志与 `web-relay-record` 记录里 |
 | 隧道日志 | 内网主机 `dsh web` 终端 | `ssh` 进程每次退出的退出码与 stderr 摘要 |
 | 隧道状态 | 记录 `web-relay-record` 的 `tunnelState`（卡片）与 `ctx.webRelay.status()`（宿主） | `stopped` / `starting` / `running` / `backing-off`；`status()` 另带 `since` / `connectedCount` / `lastExit` / `lastPreflight` |
 | 引导步骤结果 | 记录的 `steps` | 每步 `ok` / `failed` / `skipped` 与一句话说明；第 13 步的 detail 另带 `中继对外监听：…` |
@@ -28,7 +28,9 @@
 | 手机打不开，Safari 报证书错误 | 客户端未信任中继 CA，或未在"证书信任设置"里开启完全信任 | 第一台设备从服务器本机复制根证书（`$DSH_HOME/dsh-web-relay/ca/root.crt`），或经不依赖 TLS 信任的渠道送到设备，与卡片显示的 `caFingerprint` 核对 |
 | 手机弹出重复的用户名/密码框 | 网关口令错，或换过口令后 Safari 缓存了旧的 | 卡片里改 `gateway.password` 并保存；在 Safari 里清除该站点数据 |
 | 页面加载出 403 | 权威没进 `trustedHosts`（`vps.host` + `gateway.port` 与 Caddy 站点地址不一致） | 内网启动日志的自检第 ① 项；它直接指出两个值的差异 |
-| 页面加载出 401 | 权威进了 `trustedHosts`，但 Cookie 不对（过期 / 换了权威 / 换了签名密钥） | 重新打开入口 URL `/relay/enter` |
+| 页面加载出 401，且地址栏停在 `/relay/enter` | 恢复跳转发生过，但换票没成功 | 内网启动日志的自检第 ③ 项；它区分"改写不在了"与"换票失败" |
+| 页面加载出 401，且响应体是 `unauthorized` | 请求不是文档导航（`/api`、资源、WebSocket），中继因此按设计原样透传 401 | 若是浏览器首访，检查请求的 `Accept` 是否带 `text/html`；见 [entry.md](entry.md) |
+| 地址栏里出现过 `/relay/enter` 后回到 `/` | 正常：Cookie 在但已失效，中继用一次可见跳转把浏览器送回换票点 | 不用处理；想少一次跳转就清掉该站点数据再打开裸地址 |
 | Caddy 返回 502 "隧道未连接" | 内网主机的隧道没起来，或端口不一致 | 内网隧道日志的 `lastExit.message`；再查中继的 `permitlisten` 与 Caddy 上游地址 |
 | 隧道日志反复出现 `remote port forwarding failed for listen port 18080` | 端口被残留会话占着（预检本应已清掉），或 `permitlisten` 与 `tunnel.relayPort` 不一致 | 卡片状态区的 `lastPreflight`（`released` 刚清过一次 / `refused` 被占但不是本部署的残留 / `skipped` 预检没跑成）；再查中继 `ss -ltnp \| grep 18080`，以及 `journalctl -u ssh \| grep -iE 'address already in use\|request was denied'` |
 | 隧道日志出现 `Host key verification failed` | 中继换了主机密钥 | 核对云控制台指纹后清空记录的 `observedHostKeyFingerprint` 并重新引导 |
@@ -41,6 +43,7 @@
 | 页面加载出 421 | Host 与权威不匹配（兜底站点接住了） | 核对客户端地址栏里的 host:port 与卡片显示的权威是否逐字一致 |
 | 认证成功后 `set-cookie` 里没有 `Secure` | 上游片段里的 `header_down` 掉了，或被改写成了不起作用的站点级 `header` | 中继 `/etc/caddy/Caddyfile` 的 `(dsh-relay-upstream)` 段；见 [relay-host.md](relay-host.md) 第 3 节 |
 | 中继上出现了 `gateway.port` 之外的 HTTP 监听 | 发行版 Caddy 包自带的 `/etc/caddy/Caddyfile` 里的 `:80` 站点，或别的服务后来被装上来了（多一条读到会话 Cookie 的路） | 中继 `ss -ltnp` 与第 13 步记录的 `中继对外监听：…`；发行版自带的 `:80` 块由操作者从 `/etc/caddy/Caddyfile` 删除后 `caddy reload`，别的服务能用别的方式提供就撤掉端口，否则必须接受这条风险 |
+| `curl -L` 打开裸地址时重定向绕个不停 | curl 默认不保存 Cookie，每次请求都是"没有 DSH Cookie"的首访，于是又被送进换票点 | 加 `-c/-b <文件>` 让 curl 收下 Cookie；浏览器不存在这个问题（它会存 Cookie） |
 | 页面能开但对话不刷新 | 长连接被中间设备或 `stream_timeout` 切断 | 中继访问日志里该连接的耗时；`stream_timeout` 已设为 24h，运营商也会切断空闲连接，DSH 客户端会重连 |
 
 **一条通用原则**：403 与 401 的区分是最有用的信号。403 永远是权威问题，401 永远是凭据问题。这个区分来自 DSH 自身的设计，本插件只是把它在启动时主动暴露出来。
@@ -87,7 +90,7 @@ caddy reload --config /etc/caddy/Caddyfile
 # 重新启动 dsh web --profile web
 ```
 
-重启本身**不足以**作废 Cookie——签名密钥是持久化的凭据记录，只有删掉它才会轮换。所有设备都需要重新打开 `/relay/enter`。
+重启本身**不足以**作废 Cookie——签名密钥是持久化的凭据记录，只有删掉它才会轮换。所有设备下次打开裸地址时会被中继送进换票点，因此不需要人工做任何事。
 
 ### 轮换中继的隧道公钥
 
@@ -117,7 +120,7 @@ sudo kill <pid>                  # 确认是本部署的残留后杀掉，端口
 
 1. 卡片里改 `vps.host` 或 `gateway.port` 并保存。
 2. 插件重算权威、重解析 `connection` 行、重新引导（Caddy 站点地址、证书、`permitlisten` 都跟着新地址走）。
-3. 客户端更新入口 URL（只有权威变了才需要）。
+3. 客户端更新访问地址（只有权威变了才需要）。
 
 **换权威会让所有旧 Cookie 立刻失效**，因为 Cookie 的名字与签名负载都绑定权威。这是设计使然，不是缺陷。
 

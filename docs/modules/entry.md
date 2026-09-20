@@ -1,22 +1,24 @@
-# 模块：公网入口、CA 分发与登录接续
+# 模块：裸地址入口、CA 分发与登录接续
 
-职责：给操作者一条**不含任何秘密、可以收藏**的入口 URL，让手机重新进入时只需输入一次网关口令；并说明中继 CA 根证书如何到达设备，以及用哪个指纹核对它。
+职责：让操作者只需要打开 `https://<publicAuthority>/` 就能进入界面（手机重新进入时只需输入一次网关口令）；并说明中继 CA 根证书如何到达设备，以及用哪个指纹核对它。
 
 ## 要解决的问题
 
 DSH 的浏览器认证是"进程启动令牌 → Cookie"：`dsh web` 启动时打印一个带 `?token=` 的 URL，浏览器打开它，`authorizeIndex()` 校验权威与令牌，下发一个权威绑定的 HMAC Cookie（默认 30 天，`connection` 行的 `cookieMaxAgeDays`）。令牌每次启动都变，因此那个 URL 不能收藏。
 
-本模块解决"重新拿令牌"这一段：入口本身不携带凭据，操作者在浏览器弹出的口令框里输入网关口令，请求到达内网主机后由插件在服务端完成一次令牌交换。第二个问题是"装不装 CA"——根证书必须能被送到设备、且能被核对指纹，否则"装 CA"这个选项在手机上无法完成。
+本模块解决"重新拿令牌"这一段：换票点本身不携带凭据，操作者在浏览器弹出的口令框里输入网关口令，请求到达内网主机后由插件在服务端完成一次令牌交换。地址栏里不会出现这条路径——中继把"没带 DSH 会话 Cookie 的文档导航"在内部改写到它，因此操作者唯一需要知道的地址是裸权威。第二个问题是"装不装 CA"——根证书必须能被送到设备、且能被核对指纹，否则"装 CA"这个选项在手机上无法完成。
 
 ## 一条路由
 
 它是精确路径注册（`kind: 'exact'`），因此不会与 SPA 的 fallback 或 `/api` 前缀冲突。
 
 ```
-GET /relay/enter     # entry.enabled 为真时注册，公网 HTTP 面上唯一的路由
+GET /relay/enter     # 换票点，公网 HTTP 面上唯一属于插件的路由；始终注册
 ```
 
 `/relay/enter` 不接受查询参数，也不要求任何 Cookie。它能这样是因为它**在结构上位于网关口令之后**：中继的站点块把没有网关会话 Cookie 的请求先交给 `basic_auth`，只有口令通过才继续代理到内网主机（见 [relay-host.md](relay-host.md)）。因此"请求到达了 `/relay/enter`"本身就是"口令正确"的证明，插件不需要再校验一遍，也不持有任何入口凭据。
+
+它不管请求是怎么到达的：中继的内部改写、失效 Cookie 的恢复跳转、有人在地址栏里直接敲这条路径，走的是同一段逻辑。`entry.enabled` 为假时它照样注册，只是回一段 `403` 说明（见下文）。路径始终存在是有意的——中继侧的改写与恢复跳转都指向它，让路径消失等于让浏览器在 `401` 与 `302` 之间打转。
 
 处理逻辑：
 
@@ -26,23 +28,34 @@ GET /relay/enter     # entry.enabled 为真时注册，公网 HTTP 面上唯一�
 3. 向浏览器回 303，Location 为 /，原样转发 Set-Cookie
 ```
 
-第 1 步是关键的复用点：启动令牌来自 `ctx.connection.authenticatedUrl(...)`，它是 DSH 的公开方法，把"本进程当前的启动令牌"拼到给定 URL 上。插件因此**永远不接触签名密钥**，也不需要知道 Cookie 是怎么生成的。那一跳走的是 DSH 自己的 `authorizeIndex()`，与 `dsh web` 在 LAN 上的行为完全一致。实测浏览器看到的响应是 `303`、`location: /`，且只有一条 `Set-Cookie`。
+第 1 步是关键的复用点：启动令牌来自 `ctx.connection.authenticatedUrl(...)`，它是 DSH 的公开方法，把"本进程当前的启动令牌"拼到给定 URL 上。插件因此**永远不接触签名密钥**，也不需要知道 Cookie 是怎么生成的。那一跳走的是 DSH 自己的 `authorizeIndex()`，与 `dsh web` 在 LAN 上的行为完全一致。实测换票这一跳回 `303`、`location: /`，并原样带出 DSH 下发的那条 `Set-Cookie`（口令分支上中继另外还写一条 `relay_session`）。
 
 这一跳必须用 `node:http` 发，不能用 `fetch`：令牌的校验依据是请求的 `Host`，而 `Host` 在 fetch 规范里是禁止修改的头，undici 会拒绝设置。用 `fetch` 时 Host 会是 `127.0.0.1:<dshPort>`，权威对不上，签出的 Cookie 名字与受众都会是错的。`node:http` 没有这个限制，也不需要引入任何依赖。
 
 `ctx.connection` 通过 `ctx.inject(['connection'], (c) => ...)` 获取，不放进顶层 `inject`（那会与 `connection` 行注入 `webRelay` 形成等待环），与 `@deepseek-ai/dsh-client-connection` 自己用 `ctx.inject(['webServer'], ...)` 的写法一致。
 
-公网 HTTP 面上只有这一条路由，根证书不经过它。根证书由 Caddy 在中继上生成，由引导第 10 步用 ssh 取到 `$DSH_HOME/dsh-web-relay/ca/root.crt`（`0644`），再经本地复制、AirDrop、聊天软件等不依赖 TLS 信任的渠道送到设备。第一台设备因此不能靠"信任一个自己还不信任的 TLS 端点"取到根证书——这一点现在是结构性的：不存在任何提供根证书的 HTTP 端点。实测 `https://<publicAuthority>/relay/ca.crt` 不带凭据时是 `401`，带上网关口令（或带 DSH 会话）时是 `404`，即这条路径已经不存在。设备装好后用记录的 `caFingerprint` 核对指纹，可与中继上 `data/pki/authorities/dsh-relay/root.crt` 逐字比对。
+公网 HTTP 面上只有这一条路由，根证书不经过它。根证书由 Caddy 在中继上生成，由引导第 10 步用 ssh 取到 `$DSH_HOME/dsh-web-relay/ca/root.crt`（`0644`），再经本地复制、AirDrop、聊天软件等不依赖 TLS 信任的渠道送到设备。第一台设备因此不能靠"信任一个自己还不信任的 TLS 端点"取到根证书——这一点现在是结构性的：不存在任何提供根证书的 HTTP 端点。实测（不带 `Accept: text/html`）`https://<publicAuthority>/relay/ca.crt` 不带凭据时是 `401`，带上网关口令（或带 DSH 会话）时是 `404`；即便用浏览器打开它，中继也会把这次文档导航带进换票点，拿到的是一份会话而不是文件。设备装好后用记录的 `caFingerprint` 核对指纹，可与中继上 `data/pki/authorities/dsh-relay/root.crt` 逐字比对。
 
-直接打开 `https://<publicAuthority>/`（不带 `/relay/enter`）不会进入入口：浏览器还没有 DSH 会话 Cookie 时它得到 DSH 自己的 `401` 与 `unauthorized` 响应体，并停在那一页。Caddy 不会把它改写成跳转，也没法改写：`handle_errors` 只处理 Caddy 自己的处理错误（502 一类），不改变上游透传的 4xx。因此入口地址只能由卡片与引导横幅告诉操作者，不存在"首次访问自动带路"。
+## 裸地址如何自动带路
 
-## 入口 URL 从哪来
+操作者打开的是 `https://<publicAuthority>/`。没有 DSH 会话 Cookie 时它本来是 DSH 的 `401`，中继在**服务端**把这次请求改写成 `/relay/enter`（`deploy/Caddyfile.snippet` 里的 `@noDsh`），于是换票点换到 Cookie 并回 `303` 到 `/`，浏览器地址栏里始终只有裸权威：
 
-入口 URL 完全由权威决定：`https://<publicAuthority>/relay/enter`。它不含任何秘密，所以可以进收藏夹、进浏览器历史、进 iCloud 同步、进设备备份——这些地方泄漏它都不构成凭据泄漏。真正承担身份的是网关口令与 DSH 的权威绑定 Cookie。
+```
+GET /   （无 DSH Cookie，Accept: text/html）→ 内部改写 → GET /relay/enter → 303 / + Set-Cookie
+GET /   （带刚拿到的 Cookie）                → 直通 → 200 界面
+```
 
-这意味着入口**没有任何需要生成、轮换或保管的东西**：没有 key，没有记录字段，没有轮换按钮。要换凭据就换网关口令，要作废全部会话就删掉 DSH 的会话签名密钥记录，两者都见 [operations.md](operations.md)。
+改写只针对文档导航：判据是 `Accept` 带 `text/html` 且 Cookie 里没有 `dsh-auth-`。`/api`、页面自己发起的资源请求与 WebSocket 握手都不带这个 `Accept`，它们各自的 `401` 原样透传——那是客户端自己要处理的信号，变成一次跳转就成了"接口返回了一张 HTML 页面"。改写不看路径：`/`、`/index.html` 与地址栏里手敲的任何路径都落到同一个换票点。
 
-`entry.enabled` 是唯一的开关：关掉后 `/relay/enter` 不再注册，公网入口只能靠已有的 DSH Cookie 进入。它的用途是"临时关掉入口而不停隧道"。
+Cookie 在、但已经失效（换过权威或换过签名密钥）时改写不会发生，上游回 `401`，中继把它换成一次**可见的**跳转到 `/relay/enter`；这是唯一一种地址栏里会出现这条路径的情况，走完就回到 `/`。跳转的判据挂在 `handle_response` 上而不是 `handle_errors`：后者只接 Caddy 自己产生的错误（`502` 一类），上游透传的 `401` 是响应而不是错误。而 `handle_response` 自己的匹配器是**响应**匹配器，`header` 看的是响应头，所以"这次是不是文档导航"必须写在块内的请求匹配器里。
+
+## 地址从哪来
+
+地址完全由权威决定：`https://<publicAuthority>/`。它不含任何秘密，所以可以进收藏夹、进浏览器历史、进 iCloud 同步、进设备备份——这些地方泄漏它都不构成凭据泄漏。真正承担身份的是网关口令与 DSH 的权威绑定 Cookie。
+
+这意味着这条路径上**没有任何需要生成、轮换或保管的东西**：没有 key，没有记录字段，没有轮换按钮。要换凭据就换网关口令，要作废全部会话就删掉 DSH 的会话签名密钥记录，两者都见 [operations.md](operations.md)。
+
+`entry.enabled` 是唯一的开关：关掉后 `/relay/enter` 不再换票，只回 `403 dsh-web-relay: 入口已关闭（entry.enabled = false）`，公网入口因此只能靠已有的 DSH Cookie 进入。它的用途是"临时关掉入口而不停隧道"。关掉时中继侧的改写与跳转不动——它们指向的路径还在，只是不再换票，所以不会打转。
 
 ## 两层与一个换票点
 
@@ -52,26 +65,26 @@ GET /relay/enter     # entry.enabled 为真时注册，公网 HTTP 面上唯一�
 | 第二层：DSH Cookie | 内网 DSH | 启动令牌换来的权威绑定 HMAC Cookie | 没有它 `/api` 全部 401 |
 | `/relay/enter` | 内网 DSH，插件注册 | **换票点，不是一层**：只做令牌交换 | 关掉它则只能靠已有 Cookie 进入 |
 
-第三条不是身份层。这是本设计相对"入口带 key"的简化：入口不再是一个需要保管的秘密，只是一条固定的、非秘密的路径。
+第三条不是身份层。这是本设计相对"入口带 key"的简化：入口不再是一个需要保管的秘密，只是一条固定的、非秘密的路径，而且不进地址栏。
 
 ## 失败与滥用
 
 - **不校验自家凭据。** 口令校验、失败计数与封禁全在网关口令那一层（Caddy 的 bcrypt 与中继上的 fail2ban）。`/relay/enter` 因此没有可被爆破的秘密，也就不需要进程内的计数与锁定。
 - **不记录秘密。** 启动令牌只出现在插件到本机 loopback 的那一次请求里，不进日志、不进 HTTP 响应体、不进浏览器地址栏。
-- **`entry.enabled` 为假时路由不存在**，请求落到 SPA 的 fallback，得到与"路径不存在"相同的响应。
+- **`entry.enabled` 为假时回 `403` 说明**，不换票。路由仍在，因此中继侧的改写与跳转不会把它变成一次往返。
 
 ## 启动横幅
 
-引导、隧道与自检都就绪后（或自检超时后），插件向 stdout 打印横幅，形如 harness 自己打印的 `dsh web:` 横幅。四行分别是入口地址、CA 指纹、观察到（或按固定值校验通过）的中继主机密钥指纹，以及装到的 Caddy 版本；引导有步骤失败时第一行会带上这个提示：
+引导、隧道与自检都就绪后（或自检超时后），插件向 stdout 打印横幅，形如 harness 自己打印的 `dsh web:` 横幅。四行分别是访问地址、CA 指纹、观察到（或按固定值校验通过）的中继主机密钥指纹，以及装到的 Caddy 版本；引导有步骤失败时第一行会带上这个提示：
 
 ```
-dsh-web-relay: https://<publicAuthority>/relay/enter
+dsh-web-relay: https://<publicAuthority>/
   根证书指纹 <caFingerprint>
   中继主机密钥 <中继主机公钥 SHA256 指纹，或「未固定，见卡片记录」>
   Caddy <版本号，或「沿用已有安装」>
 ```
 
-之所以直接写 stdout，是因为本构建的日志服务没有 console exporter：逐步引导进度走 harness 日志，持久状态写进 `web-relay-record` 记录，入口 URL 与 CA 指纹需要操作者在终端上直接看到。指纹就是记录里的 `caFingerprint`，与卡片状态区一致，可在中继上对 `data/pki/authorities/dsh-relay/root.crt` 核对。
+之所以直接写 stdout，是因为本构建的日志服务没有 console exporter：逐步引导进度走 harness 日志，持久状态写进 `web-relay-record` 记录，访问地址与 CA 指纹需要操作者在终端上直接看到。指纹就是记录里的 `caFingerprint`，与卡片状态区一致，可在中继上对 `data/pki/authorities/dsh-relay/root.crt` 核对。
 
 这一行不含任何秘密，因此没有"何时打印"的策略开关。它只在启动时打印，不进入浏览器可见面，因此不需要客户端本地化与快照测试；它不写任何 HTTP 响应体。
 

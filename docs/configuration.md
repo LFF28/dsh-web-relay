@@ -17,7 +17,7 @@
 | `bootstrap.stepTimeoutMs` | `number` | `120000` | 单个引导步骤的总超时（含 `apt` 安装） |
 | `bootstrap.commandTimeoutMs` | `number` | `30000` | 引导里单条远程命令的超时 |
 | `bootstrap.connectTimeoutSec` | `number` | `10` | `ssh -o ConnectTimeout` |
-| `entry.enabled` | `boolean` | `true` | 关掉后不注册 `/relay/enter`，公网入口只剩依赖已有 Cookie 的路径 |
+| `entry.enabled` | `boolean` | `true` | 关掉后换票点 `/relay/enter` 只回 `403` 说明，公网入口只剩依赖已有 Cookie 的路径；中继侧的改写与跳转不变 |
 | `selfCheck.publicProbe` | `boolean` | `true` | 引导结束后是否真的去请求一次公网权威 |
 | `selfCheck.probeTimeoutMs` | `number` | `5000` | 自检请求超时 |
 
@@ -70,13 +70,13 @@
 | `steps` | `{ id, title, status, detail }[]` | 最近一次引导的逐步结果，`status` 为 `ok`、`failed` 或 `skipped`；第 13 步的 `detail` 另带 `中继对外监听：…` |
 | `lastError` | `string` | 最近一次失败的原文摘要，成功时为空 |
 
-入口 URL 完全由 `publicAuthority` 决定：`https://<publicAuthority>/relay/enter`。它不含任何秘密，因此可以放心收藏、同步与备份；承担身份的是网关口令与 DSH 的权威绑定 Cookie，见 [modules/entry.md](modules/entry.md)。
+访问地址完全由 `publicAuthority` 决定：`https://<publicAuthority>/`。它不含任何秘密，因此可以放心收藏、同步与备份；承担身份的是网关口令与 DSH 的权威绑定 Cookie，首次访问时由中继在内部带路到换票点，见 [modules/entry.md](modules/entry.md)。
 
 ## 改动的影响面
 
 | 改动的字段 | 插件动作 | 用户可见后果 |
 | --- | --- | --- |
-| `vps.host`、`gateway.port` | 重算权威 → 重解析 `connection` 行 → 重新引导 → 重启隧道 | DSH 的 Cookie 全部失效（Cookie 与权威绑定），手机要用新权威重新进入一次 |
+| `vps.host`、`gateway.port` | 重算权威 → 重解析 `connection` 行 → 重新引导 → 重启隧道 | DSH 的 Cookie 全部失效（Cookie 与权威绑定），手机要用新地址重新进入一次 |
 | `gateway.password` | 重新哈希并 reload Caddy，同时重置 `gateway.sessionSecret` | 所有设备的网关会话立刻失效，下次进入重新询问口令 |
 | `vps.user`、`vps.port`、`vps.identityFile` | 下一次引导与下一次转发前预检改用新凭据 | 引导步骤用新凭据重跑一遍，已就绪的步骤快速跳过；预检立即改用新凭据 |
 | `vps.hostKeyFingerprint` | 与观察值比对 | 不匹配时引导停止在这一步，不会带着未验证的连接继续 |

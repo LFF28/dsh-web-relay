@@ -9,7 +9,7 @@
 | 公网扫描 | 攻击者扫到 8443 上的 TLS 服务 | 没有网关口令越不过第二层；DSH 侧还有第三层 |
 | 口令爆破 | 对 Caddy 的口令校验反复尝试 | bcrypt 校验成本 + 中继侧 fail2ban 封 IP（只统计带 `Www-Authenticate` 的 `basic_auth` 401，不把 DSH 自身的 401 计入），见 [modules/relay-host.md](modules/relay-host.md) |
 | 中间人 | 链路被旁听或篡改 | TLS；内网到中继的 SSH 固定主机密钥 |
-| 入口 URL 泄漏 | 收藏的 `/relay/enter` 落到他人手里 | 该 URL 不含任何秘密，单独无效；没有网关口令到不了内网主机，见 [modules/entry.md](modules/entry.md) |
+| 访问地址泄漏 | 收藏的 `https://<权威>/` 落到他人手里 | 该地址不含任何秘密，单独无效；没有网关口令到不了内网主机，见 [modules/entry.md](modules/entry.md) |
 | Cookie 失窃 | 浏览器侧 Cookie 被读走 | `HttpOnly`（脚本读不到）+ `SameSite=Strict`（跨站不发）+ `Secure`（明文不发，由中继补上）+ 权威绑定（换权威即失效） |
 | 同主机其他端口的服务 | 中继上还跑了别的 HTTP 服务，读到或写入同一个 Cookie | 中继只开 `gateway.port` 一个 HTTP 端口；Cookie 不按端口隔离（RFC 6265 第 8.5 节），所以唯一可靠的对策是"没有第二个端口" |
 | 中继主机被入侵 | VPS 被攻破 | 中继上没有任何 DSH 凭据，但隧道上的明文流量可被读到——这是本架构的固有代价，见下文 |
@@ -35,11 +35,11 @@
 
 四层互相独立，任一层失效不连带其他层。第一、二层在中继主机，第三、四层在内网主机。
 
-`/relay/enter` 不是一层。它不接受查询参数，也没有自家凭据，只把"已经过了第二层"的请求换成一份 DSH Cookie；它之所以安全，是因为中继的站点块在结构上让没有口令的请求到不了它，见 [modules/entry.md](modules/entry.md)。
+`/relay/enter` 不是一层。它不接受查询参数，也没有自家凭据，只把"已经过了第二层"的请求换成一份 DSH Cookie；它之所以安全，是因为中继的站点块在结构上让没有口令的请求到不了它——包括中继把裸地址上的文档导航内部改写到它这一条：改写发生在 `basic_auth` 之后，因此改写本身不会把请求送进一个没有口令的路径。见 [modules/entry.md](modules/entry.md)。
 
 **为什么第二层是必需的，而不是可选加固。** DSH 自身的认证是单操作者的：一个启动令牌、一个长期 Cookie，没有多用户、没有吊销列表、没有频率限制。把它直接挂到公网等于把一个 RCE 级界面挂到公网。
 
-**DSH 自己不给 Cookie 加 `Secure`，由中继补上。** DSH 下发的是 `Max-Age; Path=/; Expires; HttpOnly; SameSite=Strict`，没有 `Secure`。缺了这一位，同一个权威上的任何一次明文请求都会把 Cookie 送出去，RFC 6265 第 8.3 节对这种情况的结论是"安全信道提供的保护基本是空的"。插件不修改 DSH 源码，所以补这一位发生在上游定义里的 `header_down Set-Cookie "$" "; Secure"`：它把每个 `Set-Cookie` 的值整体匹配并在末尾追加，与 Cookie 的属性顺序无关，也不会给本来就带 `Secure` 的响应对出重复属性。改动那一块时要连带重跑 [modules/relay-host.md](modules/relay-host.md) 第 7 节的 `Secure` 自检——按 `dsh-auth-` 前缀定点匹配的写法能过校验、今天也能工作，但 DSH 一旦调整属性顺序就会静默失效。
+**DSH 自己不给 Cookie 加 `Secure`，由中继补上。** DSH 下发的是 `Max-Age; Path=/; Expires; HttpOnly; SameSite=Strict`，没有 `Secure`。缺了这一位，同一个权威上的任何一次明文请求都会把 Cookie 送出去，RFC 6265 第 8.3 节对这种情况的结论是"安全信道提供的保护基本是空的"。插件不修改 DSH 源码，所以补这一位发生在上游定义里的 `header_down Set-Cookie "$" "; Secure"`：它把每个 `Set-Cookie` 的值整体匹配并在末尾追加，与 Cookie 的属性顺序无关，也不会给本来就带 `Secure` 的响应对出重复属性。这一位如今由引导第 13 步的自检盯着（换票拿到的 Cookie 必须带 `Secure`），不再是人工核对项；按 `dsh-auth-` 前缀定点匹配的写法能过校验、今天也能工作，但 DSH 一旦调整属性顺序就会静默失效，届时自检会当场失败。
 
 **中继上只有一个 HTTP 端口，这是 Cookie 的要求而不只是收缩攻击面。** RFC 6265 第 8.5 节的结论是 Cookie 不提供端口隔离：同一台主机上另一个端口上的服务既读得到也写得到同一个 Cookie。DSH 的 Cookie 名只由权威的 host 决定，所以中继上多开一个能吃 Cookie 的端口就等于多一条绕开第三层的路。因此"权威只以 HTTPS 提供服务"加上"中继上不存在第二个 HTTP 服务端口"是同一件事的两半，插件在这两条上都不提供配置项。这条要求由插件与操作者共同兑现：apt 装出的发行版默认 Caddyfile 末尾有一个 `:80` 静态站点，插件按约不碰托管块之外的内容，[modules/relay-host.md](modules/relay-host.md) 第 3 节给出了删掉它并重载 Caddy 的步骤，引导第 13 步的"中继对外监听"列表是发现它的方式。
 
@@ -106,7 +106,7 @@ Caddy 到 DSH 这一段是 loopback 上的明文 HTTP，Host 原样透传。**�
 | 目标 | 动作 | 影响 |
 | --- | --- | --- |
 | 换掉网关口令 | 卡片里改 `gateway.password` 并保存 | 口令重新哈希，同时重置 `gateway.sessionSecret`，所有设备下次进入重新输口令 |
-| 作废全部 DSH 会话 | 删除 `$DSH_HOME/.credentials.yaml` 里的 `client-connection/browser-session` 记录并重启 profile | 全部旧 Cookie 校验失败，所有设备重新打开 `/relay/enter` |
+| 作废全部 DSH 会话 | 删除 `$DSH_HOME/.credentials.yaml` 里的 `client-connection/browser-session` 记录并重启 profile | 全部旧 Cookie 校验失败，所有设备下次打开裸地址时由中继自动带回换票点 |
 | 收回隧道权限 | 从 `/etc/dsh-web-relay/authorized_keys` 删掉那一行并 `systemctl reload ssh` | 中继不再接受该反向转发 |
 
 重启 profile **不会**吊销 Cookie：签名密钥是复用的持久化凭据，重启后旧 Cookie 继续有效。

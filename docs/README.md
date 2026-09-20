@@ -57,9 +57,9 @@ dsh plugin --profile web add file:/path/to/dsh-web-relay
 1. 把插件装进 profile，重启 `dsh web`。
 2. 在**服务器本机**用浏览器打开 `http://127.0.0.1:3080`。首次配置只能在这里做：DSH 的客户端在非 loopback 页面上把设置持久化降级为内存，远程页面写不了设置（见 [security.md](security.md)）。
 3. 打开 设置 ▸ 插件 ▸ **Web Relay**，填入中继地址、管理账号与网关口令。保存即触发自动引导。
-4. 插件随后自动完成：生成本机专用中继密钥 → 用管理账号登录中继 → 建受限中继用户与 `authorized_keys` → 安装并配置 Caddy → 为中继权威签发证书 → 把权威写进 DSH 的组合层（host trust）→ 拉起 SSH 反向隧道。终端上打印横幅，第一行是入口地址 `dsh-web-relay: https://<权威>/relay/enter`，随后是中继 CA 指纹、中继主机密钥指纹与 Caddy 版本。引导第 10 步同时把中继上的 CA 根证书取回本机，存在 `$DSH_HOME/dsh-web-relay/ca/root.crt`。
-5. 把 `$DSH_HOME/dsh-web-relay/ca/root.crt` 送到手机上并安装：公网 HTTP 面只有 `/relay/enter` 一条路由，根证书不经过它，所以这一步走本机复制、隔空投送或聊天软件，装之前先与横幅或卡片上的 `caFingerprint` 核对。**唯一需要你决定的是装不装中继 CA**：装了就消除证书警告，不装则每次访问都要手动点过警告且失去身份验证，见 [security.md](security.md) 的"证书与 CA"一节。
-6. 手机用浏览器打开入口 URL（`https://<权威>/relay/enter`）并输入网关口令即可使用。
+4. 插件随后自动完成：生成本机专用中继密钥 → 用管理账号登录中继 → 建受限中继用户与 `authorized_keys` → 安装并配置 Caddy → 为中继权威签发证书 → 把权威写进 DSH 的组合层（host trust）→ 拉起 SSH 反向隧道。终端上打印横幅，第一行是访问地址 `dsh-web-relay: https://<权威>/`，随后是中继 CA 指纹、中继主机密钥指纹与 Caddy 版本。引导第 10 步同时把中继上的 CA 根证书取回本机，存在 `$DSH_HOME/dsh-web-relay/ca/root.crt`。
+5. 把 `$DSH_HOME/dsh-web-relay/ca/root.crt` 送到手机上并安装：公网 HTTP 面上没有提供根证书的端点（换票点只换会话，不返回任何文件），所以这一步走本机复制、隔空投送或聊天软件，装之前先与横幅或卡片上的 `caFingerprint` 核对。**唯一需要你决定的是装不装中继 CA**：装了就消除证书警告，不装则每次访问都要手动点过警告且失去身份验证，见 [security.md](security.md) 的"证书与 CA"一节。
+6. 手机用浏览器打开裸地址（`https://<权威>/`）并输入网关口令即可使用：中继会把这次访问在内部带到换票点，地址栏里不会出现 `/relay/enter`。
 
 ## 文档索引
 
@@ -73,7 +73,7 @@ dsh plugin --profile web add file:/path/to/dsh-web-relay
 | [modules/bootstrap.md](modules/bootstrap.md) | 自动引导：用管理账号在中继上完成 sshd / Caddy / 证书配置（前提：公钥登录 + 免密 sudo） |
 | [modules/trust.md](modules/trust.md) | 权威注册与启动自检：把"手机 403"变成"启动即报错" |
 | [modules/tunnel.md](modules/tunnel.md) | SSH 反向隧道守护：子进程、重连、释放、诊断 |
-| [modules/entry.md](modules/entry.md) | 公网入口与登录接续：不含秘密的入口 URL `/relay/enter`、CA 分发 |
+| [modules/entry.md](modules/entry.md) | 裸地址入口与登录接续：不含秘密的访问地址、内部换票点 `/relay/enter`、CA 分发 |
 | [modules/relay-host.md](modules/relay-host.md) | 中继侧的生效形态：sshd 加固、Caddyfile、防火墙、验证清单 |
 | [modules/operations.md](modules/operations.md) | 运行手册、故障定位表、轮换与吊销 |
 | [roadmap.md](roadmap.md) | 后续项与设计假设的核对方式 |
@@ -86,5 +86,6 @@ dsh plugin --profile web add file:/path/to/dsh-web-relay
 | 内网主机 | 运行 `dsh web` 的机器，可以没有公网地址 |
 | 权威（authority） | 浏览器地址栏里的 `host[:port]`，本文档中记作 `publicAuthority` |
 | 网关 | 中继上的 Caddy 站点，负责 TLS 与口令层 |
-| 入口 URL | `https://<publicAuthority>/relay/enter`，不含任何秘密，用于 Cookie 过期后重新进入 |
+| 访问地址 | `https://<publicAuthority>/`，不含任何秘密；Cookie 过期后重新打开它即自动续上 |
+| 换票点 | 内网插件在 `/relay/enter` 上的一条路由，把"已过网关口令"换成 DSH 会话；由中继在内部改写到达，不进地址栏 |
 | 引导 | 插件用管理账号在中继上自动完成的一次幂等配置动作 |

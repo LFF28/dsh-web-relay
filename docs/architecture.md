@@ -36,7 +36,7 @@
 | --- | --- | --- | --- |
 | 行为旋钮 | 包内 `cordis.patch.yml` 的行 `config` | 包作者 | 超时、退避序列、入口与自检开关、日志标签；都带默认值，无需配置即可运行 |
 | 部署参数 | settings 命名空间 `web-relay` | 用户在设置卡片里填 | 中继地址、管理账号与其私钥路径、网关口令、主机密钥指纹固定 |
-| 运行记录 | settings 命名空间 `web-relay-record` | 插件 | 引导状态、观察到的指纹、入口 URL、CA 指纹、引导步骤结果 |
+| 运行记录 | settings 命名空间 `web-relay-record` | 插件 | 引导状态、观察到的指纹、访问地址、CA 指纹、引导步骤结果 |
 
 把部署参数放进 settings 而不是 patch 文件，有三个直接后果：
 
@@ -77,7 +77,7 @@ Host 半边（`lib/index.js`）暴露一个 `dsh-web-relay` 插件，内部按�
 | `bootstrap` | 幂等引导：登录中继、建受限用户、装 Caddy、发证书、取回 CA，见 [modules/bootstrap.md](modules/bootstrap.md) |
 | `trust` | 把 `publicAuthority` 变成围栏受信项（改权威时重解析 `connection` 行），并跑启动自检，见 [modules/trust.md](modules/trust.md) |
 | `tunnel` | 转发前预检（清掉上一轮残留的监听端点）、SSH 反向转发子进程的生命周期、退避、健康判定、拆除，见 [modules/tunnel.md](modules/tunnel.md) |
-| `entry` | `/relay/enter` 一条精确路由，只把启动令牌换成 DSH Cookie，见 [modules/entry.md](modules/entry.md) |
+| `entry` | `/relay/enter` 一条精确路由（换票点）：只把启动令牌换成 DSH Cookie；中继把裸地址上的文档导航在内部改写到它，见 [modules/entry.md](modules/entry.md) |
 
 Client 半边（`lib/client.js`）只做一件事：向 `plugins.item` 注册一张以 `web-relay` 为 `id` 的设置卡片。卡片自绘表单与状态区，只依赖平台模块表里的 `react`、`react/jsx-runtime`、`@deepseek-ai/dsh-client-store`、`@deepseek-ai/dsh-client-ui-primitives`，其余全部走服务：`ctx.slots`、`ctx.settingsScope`、`ctx.locale`。
 
@@ -93,7 +93,7 @@ Client 半边（`lib/client.js`）只做一件事：向 `plugins.item` 注册一
 
 ## 启动时序
 
-1. `web-relay` 行 `apply`：读 `ctx.webServer.port` 得到本机端口，注册 `/relay/enter` 一条精确路由，同步 `provide` `webRelay`。
+1. `web-relay` 行 `apply`：读 `ctx.webServer.port` 得到本机端口，注册 `/relay/enter` 一条精确路由（`entry.enabled` 为假时它回 `403`，路由本身仍在），同步 `provide` `webRelay`。
 2. `apply` 内用 `ctx.inject(['settings'], …)` 注册两个命名空间。settings 已在更早的基础层行里就绪，回调同步执行，因此**已知的权威在第一次解析 `connection` 行时就可用了**。
 3. `connection` 行按注入出现而激活，围栏拿到权威列表。
 4. 若 settings 里部署参数齐全，`autoStart` 打开时插件按 [modules/bootstrap.md](modules/bootstrap.md) 的顺序引导并拉起隧道；若上次运行已完成引导，则直接拉起隧道。
@@ -102,7 +102,8 @@ Client 半边（`lib/client.js`）只做一件事：向 `plugins.item` 注册一
 ## 不变量
 
 - DSH 永远只监听 `127.0.0.1`；内网主机永远不监听公网。
-- 公网入口 URL 不含任何秘密；网关口令从不出现在 URL、书签或浏览器历史里。
+- 公网访问地址（裸权威）不含任何秘密；换票点这条路径不经操作者的手，网关口令从不出现在 URL、书签或浏览器历史里。
+- 没带 DSH 会话 Cookie 的文档导航一定被带进换票点：中继改写在前、失效 Cookie 的 `401` 恢复跳转在后；带 Cookie 的请求不被改写（没有这条判据就会每次取界面都换一次票）。
 - Caddy 永远不改写 Host / Origin / Referer。
 - 中继上只有一个 HTTP 端口（`gateway.port`），且只有 loopback 上的 `18080` 作为它的上游。
 - 每个经过中继的 `Set-Cookie` 都带 `Secure`；DSH 自己不下发这一位，由上游定义里的 `header_down` 补上。
