@@ -8,7 +8,7 @@
 dsh plugin --profile web add file:/path/to/dsh-web-relay
 ```
 
-本目录是设计文档，不含实现。文档按功能模块拆分，每个模块给出职责、接口、配置字段、失败模式，以及它复用的既有能力。
+本目录是设计文档，描述已实现的插件。文档按功能模块拆分，每个模块给出职责、接口、配置字段、失败模式，以及它复用的既有能力。
 
 ## 需求与约束
 
@@ -48,7 +48,7 @@ dsh plugin --profile web add file:/path/to/dsh-web-relay
 
 - 内网主机**不开任何入站端口**；连接方向永远由内网主机发起，第三方即使知道公网 IP 也连不到它。
 - 中继上的 `127.0.0.1:18080` 只在 loopback 上，能连它的只有同一台机器上的 Caddy，见 [modules/relay-host.md](modules/relay-host.md)。
-- 中继对外只有 `8443` 一个 HTTP 端口。Cookie 不按端口隔离（RFC 6265 第 8.5 节），多一个端口就多一条读到会话 Cookie 的路，见 [security.md](security.md)。
+- 中继对外只有 `8443` 一个 HTTP 端口。Cookie 不按端口隔离（RFC 6265 第 8.5 节），多一个端口就多一条读到会话 Cookie 的路，见 [security.md](security.md)；发行版默认 Caddyfile 自带的 `:80` 站点要按 [modules/relay-host.md](modules/relay-host.md) 第 3 节删掉。
 
 ## 首次使用流程
 
@@ -57,7 +57,7 @@ dsh plugin --profile web add file:/path/to/dsh-web-relay
 1. 把插件装进 profile，重启 `dsh web`。
 2. 在**服务器本机**用浏览器打开 `http://127.0.0.1:3080`。首次配置只能在这里做：DSH 的客户端在非 loopback 页面上把设置持久化降级为内存，远程页面写不了设置（见 [security.md](security.md)）。
 3. 打开 设置 ▸ 插件 ▸ **Web Relay**，填入中继地址、管理账号与网关口令。保存即触发自动引导。
-4. 插件随后自动完成：生成本机专用中继密钥 → 用管理账号登录中继 → 建受限中继用户与 `authorized_keys` → 安装并配置 Caddy → 为中继权威签发证书 → 把权威写进 DSH 的组合层（host trust）→ 拉起 SSH 反向隧道。终端横幅打印入口 URL。
+4. 插件随后自动完成：生成本机专用中继密钥 → 用管理账号登录中继 → 建受限中继用户与 `authorized_keys` → 安装并配置 Caddy → 为中继权威签发证书 → 把权威写进 DSH 的组合层（host trust）→ 拉起 SSH 反向隧道。终端上打印一行 `dsh-web-relay: https://<权威>/relay/enter`。
 5. 手机用浏览器打开入口 URL（`https://<权威>/relay/enter`）并输入网关口令即可使用。**唯一需要你决定的是装不装中继 CA**：装了就消除证书警告，不装则每次访问都要手动点过警告且失去身份验证，见 [security.md](security.md) 的"证书与 CA"一节。
 
 ## 文档索引
@@ -75,7 +75,7 @@ dsh plugin --profile web add file:/path/to/dsh-web-relay
 | [modules/entry.md](modules/entry.md) | 公网入口与登录接续：不含秘密的入口 URL `/relay/enter`、CA 分发 |
 | [modules/relay-host.md](modules/relay-host.md) | 中继侧的生效形态：sshd 加固、Caddyfile、防火墙、验证清单 |
 | [modules/operations.md](modules/operations.md) | 运行手册、故障定位表、轮换与吊销 |
-| [roadmap.md](roadmap.md) | 后续项与实现阶段的验证计划 |
+| [roadmap.md](roadmap.md) | 后续项与设计假设的核对方式 |
 
 ## 术语
 

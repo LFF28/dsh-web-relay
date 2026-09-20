@@ -6,14 +6,15 @@
 
 ## 当前状态
 
-**设计阶段，尚无实现。** 本仓库现在只包含设计文档与中继侧配置模板：
+插件已实现，并已在一台真实中继（Ubuntu 26.04、`OpenSSH_10.2p1`、Caddy 2.11.4）上端到端验证过。本仓库包含实现、设计文档与中继侧配置模板：
 
 ```
+src/       插件实现（host 半边 + 浏览器半边）
 docs/      设计文档（单一事实来源）
 deploy/    引导写入中继的配置模板
 ```
 
-设计与代码落点都在 [docs/README.md](docs/README.md)：需求与约束、拓扑、首次使用流程、文档索引。实现阶段的验证计划在 [docs/roadmap.md](docs/roadmap.md)。
+设计与代码落点都在 [docs/README.md](docs/README.md)：需求与约束、拓扑、首次使用流程、文档索引。后续项与各条设计假设的核对方式在 [docs/roadmap.md](docs/roadmap.md)。
 
 ## 安装
 
@@ -28,7 +29,7 @@ dsh plugin --profile web remove dsh-web-relay
 
 ## 使用
 
-首次配置必须在**服务器本机**的 `http://127.0.0.1:<dshPort>` 页面上完成：DSH 对非 loopback 页面把设置持久化降级为内存，远程页面写不了设置。前提是中继上已经配好管理账号的公钥登录与免密 sudo——插件不配置中继的 SSH 认证，也不存管理口令。在 设置 ▸ 插件 ▸ Web Relay 填入中继地址、管理账号与网关口令，保存即触发自动引导；引导结束后，手机打开终端横幅里打印的入口 URL 并输入网关口令即可使用。完整流程见 [docs/README.md](docs/README.md)。
+首次配置必须在**服务器本机**的 `http://127.0.0.1:<dshPort>` 页面上完成：DSH 对非 loopback 页面把设置持久化降级为内存，远程页面写不了设置。前提是中继上已经配好管理账号的公钥登录与免密 sudo——插件不配置中继的 SSH 认证，也不存管理口令。在 设置 ▸ 插件 ▸ Web Relay 填入中继地址、管理账号与网关口令，保存即触发自动引导；引导结束后终端上会打印一行 `dsh-web-relay: https://<权威>/relay/enter`，手机打开这一条并输入网关口令即可使用。完整流程见 [docs/README.md](docs/README.md)。
 
 ## 许可
 

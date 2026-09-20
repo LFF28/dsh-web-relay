@@ -23,7 +23,7 @@
 
 插件不假定 `dsh web` 的端口：它读 `ctx.webServer.port` 作为隧道目标端口，读 `ctx.webServer.host` 判断是否只绑在 loopback。
 
-转发前预检没有对应字段。它只在 `tunnel.relayPort` 确实被占、且持有者是本部署残留的 `sshd` 进程时才动手，因此不提供开关，理由见 [modules/tunnel.md](modules/tunnel.md)。
+转发前预检没有对应字段。它只在 `tunnel.relayPort` 确实被占、且持有者是本部署残留的 `sshd` / `sshd-session` 进程时才动手，因此不提供开关，理由见 [modules/tunnel.md](modules/tunnel.md)。
 
 ## `web-relay`（用户填的部署参数）
 
@@ -60,14 +60,15 @@
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `state` | `'idle' \| 'bootstrapping' \| 'ready' \| 'failed'` | 引导与隧道的合并状态 |
+| `state` | `'unconfigured' \| 'bootstrapping' \| 'ready' \| 'failed'` | 引导状态 |
+| `tunnelState` | `'stopped' \| 'starting' \| 'running' \| 'backing-off'` | 隧道状态；卡片直接读这一条，不走宿主 RPC |
 | `updatedAt` | `string` | 最近一次记录更新的 ISO 时间 |
 | `publicAuthority` | `string` | 已生效的权威，空字符串表示尚未生效 |
 | `observedHostKeyFingerprint` | `string` | 首次连接时实地观察到（或按固定值校验通过）的中继主机公钥指纹 |
 | `caFingerprint` | `string` | 中继 CA 根证书的 `SHA256:…` 指纹，供用户与 VPS 上 `data/pki/authorities/dsh-relay/root.crt` 核对 |
 | `caUrl` | `string` | 根证书下载地址，即 `https://<publicAuthority>/relay/ca.crt` |
-| `gateway.sessionSecret` | `secret` | 网关会话 Cookie 的比对值；`gateway.password` 每次变化时重新生成，见下节 |
-| `steps` | `{ id, title, status, detail }[]` | 最近一次引导的逐步结果，`status` 为 `ok`、`failed` 或 `skipped` |
+| `gateway.sessionSecret` | `secret` | 网关会话 Cookie 的比对值；首次引导时用 `randomBytes(24)` 的 base64url 生成并存进记录命名空间，只有 `gateway.password` 变化时才重新生成 |
+| `steps` | `{ id, title, status, detail }[]` | 最近一次引导的逐步结果，`status` 为 `ok`、`failed` 或 `skipped`；第 13 步的 `detail` 另带 `中继对外监听：…` |
 | `lastError` | `string` | 最近一次失败的原文摘要，成功时为空 |
 
 入口 URL 完全由 `publicAuthority` 决定：`https://<publicAuthority>/relay/enter`。它不含任何秘密，因此可以放心收藏、同步与备份；承担身份的是网关口令与 DSH 的权威绑定 Cookie，见 [modules/entry.md](modules/entry.md)。

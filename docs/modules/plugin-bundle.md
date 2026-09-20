@@ -11,6 +11,7 @@ dsh-web-relay/
 ├── src/
 │   ├── index.ts          # 插件入口：name / inject / Config / apply
 │   ├── config.ts         # Config 类型 + Schemastery schema
+│   ├── authority.ts      # 权威规范化助手，见 modules/trust.md
 │   ├── settings.ts       # 两个设置命名空间，见 modules/settings.md
 │   ├── bootstrap.ts      # 自动引导，见 modules/bootstrap.md
 │   ├── trust.ts          # 权威注册与启动自检，见 modules/trust.md
@@ -139,12 +140,12 @@ export interface WebRelayHandle {
   readonly trustedHosts: readonly string[]
   /** 当前权威；未配置时为 undefined。 */
   authority(): string | undefined
-  /** 引导与隧道状态快照，供卡片回显与诊断读取；不参与配置表达式。 */
+  /** 引导与隧道状态快照，供诊断读取；不参与配置表达式。 */
   status(): RelayStatus
 }
 ```
 
-服务面刻意只有三项：`trustedHosts` 是配置表达式唯一需要的东西；`authority()` 是引导、自检与卡片共用的单一权威来源；`status()` 是给卡片和日志用的只读快照。按 DSH 的服务设计规则，服务面只为当前消费者存在，因此不暴露 `start()` / `stop()` / `restart()` 这类还没有消费者的方法。
+服务面刻意只有三项：`trustedHosts` 是配置表达式唯一需要的东西；`authority()` 是引导、自检与卡片共用的单一权威来源；`status()` 是给日志与诊断用的只读快照。按 DSH 的服务设计规则，服务面只为当前消费者存在，因此不暴露 `start()` / `stop()` / `restart()` 这类还没有消费者的方法。
 
 `trustedHosts` 每次读取返回新数组，配置表达式里的展开因此不会把服务内部状态泄漏出去。
 

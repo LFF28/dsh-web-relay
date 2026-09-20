@@ -19,10 +19,10 @@ publicAuthority = canonicalAuthority(vps.host) + ':' + gateway.port
                   （vps.host 自带端口时以它为准，gateway.port 不起作用）
 ```
 
-规范化复用 DSH 自己的导出函数，不重新实现：
+规范化在插件自己的 `src/authority.ts` 里完成，不调用 DSH 的导出——`@deepseek-ai/dsh-client-connection` 并不导出这些助手。它按 `packages/client/connection/src/api-request-trust.ts` 的语义重新实现了 `parseAuthority`、`explicitPort`、`canonicalAuthority`、`isBareAuthority`、`publicAuthority` 与 `canonicalHostname`：
 
-- `assertTrustedAuthority(entry)`（`@deepseek-ai/dsh-client-connection` 导出）校验形状：必须是裸的规范 `host[:port]`，不能带 scheme、path、userinfo。**形状非法时设置保存被拒**，界面保留草稿并显示原因，文档不变。
-- `canonicalAuthority()` 会剥掉默认端口。因此 `example.com` 与 `example.com:443` 是同一个权威；IP 字面量不能带端口以外的内容。
+- 形状校验（`isBareAuthority`）要求裸的规范 `host[:port]`，不能带 scheme、path、userinfo。**形状非法时设置保存被拒**，界面保留草稿并显示原因，文档不变。
+- `canonicalAuthority()` 只在权威确实带端口时保留端口，特殊 scheme 的默认端口也算显式：`canonicalAuthority('example.com:443')` 仍是 `'example.com:443'`，与 `'example.com'` 不是同一个权威。IP 字面量不能带端口以外的内容。
 
 一条实用规则：**端口不写就等于"任意端口"**。围栏的权威条目没有端口时按 hostname 比较。设计上仍然要求显式写出中继入口端口（`gateway.port` 默认 `8443`），减少隐式行为。
 

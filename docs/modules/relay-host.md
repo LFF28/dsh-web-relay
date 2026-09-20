@@ -17,7 +17,7 @@
 
 块外内容原样保留。插件只碰这五处，卸载后中继上不会剩别的：**没有** systemd 单元、**没有**插件代码、**没有**证书生成脚本、**没有**额外的对外服务。CA 与证书全部交给 Caddy 内置签发者（见第 3 节），所以中继上不需要 `openssl`，也不需要在两处同步证书文件。
 
-除了这五处写入，插件还会在**运行期**连进来做一次转发前预检：用 `ss` 看 `tunnel.relayPort` 是否被占，被占且持有者是本部署残留的 `sshd` 进程时以 `sudo` 杀掉它，见 [tunnel.md](tunnel.md)。它不新增文件、账号或服务，但确实要求中继上有 `ss`（iproute2）、且管理账号能免密提权——这两条因此是部署的前置条件。
+除了这五处写入，插件还会在**运行期**连进来做一次转发前预检：用管理账号的 `sudo -n` 看 `tunnel.relayPort` 是否被占，被占且持有者是本部署残留的 `sshd` / `sshd-session` 进程时以 `sudo` 杀掉它，见 [tunnel.md](tunnel.md)。它不新增文件、账号或服务，但确实要求中继上有 `ss`（iproute2）、且管理账号能免密提权——这两条因此是部署的前置条件。
 
 `deploy/fail2ban/` 里的 sshd jail **不由引导安装**（它的 `ignoreip` 依赖用户才知道的内网出口地址，写错会把隧道一起封掉）；它作为模板提供，需要时手工装，见第 5 节。
 
@@ -27,7 +27,7 @@
 
 ### 账号
 
-用独立用户而不是 `root` 或管理账号：`authorized_keys` 的限制作用于**那把钥匙**，专用用户让"这把钥匙能做什么"与"我的管理钥匙"彻底分开。`--shell /usr/sbin/nologin` 让这个账号即使在别处拿到 shell 也执行不了命令。
+用独立用户而不是 `root` 或管理账号：`authorized_keys` 的限制作用于**那把钥匙**，专用用户让"这把钥匙能做什么"与"我的管理钥匙"彻底分开。`--shell /usr/sbin/nologin` 加上片段里的 `ForceCommand /usr/sbin/nologin` 让这个账号根本执行不了命令：登录只会打印 `This account is currently not available.`。
 
 ### `sshd_config` 片段
 
@@ -44,6 +44,8 @@ Match User relay
     AllowAgentForwarding no
     PermitTunnel no
     PermitTTY no
+    ClientAliveInterval 15
+    ClientAliveCountMax 3
     ForceCommand /usr/sbin/nologin
 # END dsh-web-relay
 ```
@@ -51,9 +53,11 @@ Match User relay
 - `AllowTcpForwarding remote` 是关键：只允许 `-R`（远程转发），`-L` 与 `-D` 在这个用户上被拒绝。这把钥匙因此无法拿中继当跳板去连别的主机。
 - `PermitOpen none` 与上一行一起，把"能开的东西"收窄到只有一条反向转发。
 - `GatewayPorts no` 是 OpenSSH 的默认值，显式写出来作为约束：即使 `permitlisten` 允许通配绑定，转发端点也不会绑到公网接口。
+- `ClientAliveInterval 15` 与 `ClientAliveCountMax 3`：主机侧异常消失（断电、休眠、切网）不会发 FIN，中继察觉不到对端已走，`-R` 的监听端点会一直留在那里。这两行让 sshd 在约 45 秒内丢掉这种会话，监听端点随之释放。
+- `UnusedConnectionTimeout` **保持不设**。它是全局选项，不能写进 `Match` 块；而 `ssh -N -R` 的隧道连接在很长一段时间里没有任何打开的 channel，设了它会把这条件正常工作的空闲隧道拆掉。引导只读取它的生效值（`none`）并报告，不改动它。
 - 这个片段**只放 `Match User relay` 段落**，不写 `PasswordAuthentication no` 这类全局项。全局认证策略属于主机管理员的判断，插件改它就有把管理员锁在门外的风险；而 `Match User relay` 加上一行 `restrict` 的 `authorized_keys`，已经让 `relay` 账号在协议层面不可能用口令登录。
 
-校验顺序是硬的：先 `sshd -t`，通过才 `systemctl reload ssh`。`sshd -t` 不通过就不重载并回滚该文件——一台把自己锁在门外的中继比没配置好的中继糟得多。重载后再用 `sshd -T -C user=relay,host=relay,addr=127.0.0.1` 读生效值，确认 `gatewayports no`、`permitopen none` 与允许的转发方向都在。
+校验顺序是硬的：先 `sshd -t`，通过才 `systemctl reload ssh`。`sshd -t` 不通过就不重载并回滚该文件——一台把自己锁在门外的中继比没配置好的中继糟得多。重载后再用 `sshd -T -C user=relay,host=relay,addr=127.0.0.1` 读生效值，确认 `gatewayports no`、`permitopen none`、`allowtcpforwarding remote`、`permittty no`、`clientaliveinterval 15`、`clientalivecountmax 3` 与 `unusedconnectiontimeout none` 都在。验证过的中继（Ubuntu 26.04，`OpenSSH_10.2p1 Ubuntu-2ubuntu3.2`）上读到的就是这一组。
 
 ### `authorized_keys`
 
@@ -86,11 +90,11 @@ ssh -N -R 127.0.0.1:18080:127.0.0.1:3080 \
 ss -ltnp | grep 18080        # 必须是 127.0.0.1:18080，不是 0.0.0.0:18080
 ```
 
-第二条是必查项：看到 `0.0.0.0` 说明配置没生效，此时隧道端点直接暴露在公网且**没有 TLS**。
+第二条是必查项：看到 `0.0.0.0` 说明配置没生效，此时隧道端点直接暴露在公网且**没有 TLS**。要看属主还得有 root：`sudo -n ss -ltnpH` 才给出 `users:(("sshd-session",pid=N,fd=12))`，不带 `sudo` 时 `users:(...)` 整列不会出现。
 
 ## 3. Caddy 侧
 
-版本要求：Caddy ≥ 2.9（`basic_auth` 指令名；更早版本用 `basicauth`），实机验证用 v2.10.0。上游是明文 HTTP 时，Caddy 默认**原样透传包括 `Host` 在内的请求头**，只额外设置 `X-Forwarded-*`；"自动把 Host 改成上游地址"的行为只发生在 HTTPS 上游。
+版本要求：Caddy ≥ 2.9（`basic_auth` 指令名；更早版本用 `basicauth`）；设计期在 loopback 上用 v2.10.0 验证过这份模板，部署的中继在 Ubuntu 26.04 上装到 2.11.4 并同样验证通过。上游是明文 HTTP 时，Caddy 默认**原样透传包括 `Host` 在内的请求头**，只额外设置 `X-Forwarded-*`；"自动把 Host 改成上游地址"的行为只发生在 HTTPS 上游。
 
 ### 两段式认证
 
@@ -186,6 +190,8 @@ ss -ltnp | grep 18080        # 必须是 127.0.0.1:18080，不是 0.0.0.0:18080
 	log {
 		output file /var/log/caddy/dsh-relay-access.log {
 			mode 0600
+			roll_size 20MiB
+			roll_keep 5
 		}
 		format filter {
 			wrap json
@@ -210,6 +216,7 @@ ss -ltnp | grep 18080        # 必须是 127.0.0.1:18080，不是 0.0.0.0:18080
 - **不写 `default_sni`。** 客户端连接 IP 字面量时不发 SNI，Caddy 按监听地址选站点；实测单站点场景下不发 SNI 也能正常握手并返回 200，多写一个 `default_sni` 只会引入一个需要与 `vps.host` 保持同步的冗余值。
 - **`request>uri query` 里两个字段都打码，作为兜底。** 入口不接受任何查询参数，DSH 的启动令牌也只出现在插件到本机 loopback 的那一跳里，因此当前没有任何秘密会走到这里；保留这两条替换是为了挡住将来有人把秘密重新放回查询串。Caddy 默认把 `Cookie`、`Set-Cookie`、`Authorization` 记成 `REDACTED`，查询串不在默认范围内。实测：`/relay/enter?key=ABC&token=DEF` 记成 `key=REDACTED&token=REDACTED`。
 - **删除日志里的 `X-Forwarded-For`**：前面没有 CDN 时 Caddy 的 `remote_ip` 就是真实客户端 IP，XFF 只是冗余；删掉它让 fail2ban 的规则更简单（只看 `remote_ip`）。注意这只影响**日志字段**，`reverse_proxy` 仍然给上游写一个可信的 XFF，入口路由读到的左端值仍是真实对端。实测：客户端伪造 `X-Forwarded-For: 9.9.9.9` 时上游看到的是 `127.0.0.1`。
+- **日志轮转显式设小。** `/var/log/caddy/dsh-relay-access.log` 以 `mode 0600`、`roll_size 20MiB`、`roll_keep 5` 写入：Caddy 的默认值是 100MiB × 10 个文件，对小磁盘的中继太大。
 - **`handle_errors` + `{err.status_code} == 502`，不是 `handle_response`。** 上游连不上时 Caddy 合成的 502 不经过 `handle_response`，走的是 `handle_errors`；写成 `handle_response @down status 502` 时实测返回的是 `content-length: 0` 的空 502。这段文本同时覆盖两种情形（隧道没连上、隧道通了但内网 `dsh web` 没响应），因此措辞不写死为"隧道未连接"。
 - **尾部那个 `:@@GATEWAY_PORT@@` 兜底站点是必要的。** 站点地址做主机匹配，Host 与权威不一致的请求不进入本站点。Caddy 对"监听地址上没有站点匹配"的请求返回 **200 空响应**——不是 403、不是 404，浏览器上是一片空白。这条空白页极难归因，因此显式给一个能读懂原因的答案。实测：`Host: evil.example` 时未加兜底站点得到 200 空响应，加上后得到 421 与提示文本；兜底站点不影响已声明站点的证书签发与握手。兜底站点不带 `log` 段，因此 421 请求不进访问日志：原因已经写在页面上，而把它记进日志只会让两个站点争用同一个日志文件。
 - **`stream_timeout 24h`**：给长连接一个上限，避免陈旧连接永久占用；客户端会在被切断后自动重连。
@@ -239,6 +246,8 @@ RFC 6265 第 8.3 节把这件事说得很直白：走安全信道时服务器应
 
 因此不写 `http://` 站点块，不做 80→8443 跳转，也不为任何别的用途在中继上新增监听。IP 字面量下 HSTS 不可用（RFC 6797 排除 IP 字面量），明文入口没有浏览器侧的兜底：DSH 的 Cookie 虽然现在带上了 `Secure`，但那是中继补的，而明文端口上的服务根本不经过 Caddy，也就绕过了这次改写。
 
+Caddy 主机上还可能有一份**不是插件写入**的明文站点：apt 包安装时会写出发行版自带的 `/etc/caddy/Caddyfile`，它底部是一个 `:80` 站点，用 `file_server` 提供 `/usr/share/caddy` 下的 "Caddy works!" 页面。插件把托管块放在文件顶部，并刻意保持块外内容原样，所以那个站点会继续存在，`http://<权威不带端口>/` 对互联网上任何人都返回 200 与那一页。插件既不删除也不改写块外的内容；要收掉这个面，由操作者从 `/etc/caddy/Caddyfile` 里删掉那段 `:80` 块，再 `caddy reload --config /etc/caddy/Caddyfile`。第 13 步记录里的 `中继对外监听：…` 是发现它的方式，见 [bootstrap.md](bootstrap.md) 与 [operations.md](operations.md)。
+
 兜底站点是同一个 Caddy 实例里 `8443` 上的另一个站点，不新增监听端口；`127.0.0.1:@@RELAY_PORT@@` 上的隧道端点只绑在 loopback，不对外。
 
 ## 4. 网络与防火墙
@@ -250,11 +259,11 @@ RFC 6265 第 8.3 节把这件事说得很直白：走安全信道时服务器应
 | 云安全组 | 其余入站全部拒绝 | |
 | 主机防火墙 | 允许 8443、22（同上）；拒绝其余 | 防安全组之外的路径 |
 | `sshd` | 不监听额外端口 | 只用 22 |
-| Caddy | 只监听 8443 | 不做跳转，不加第二个站点 |
+| Caddy | 只监听 8443 | 不做跳转，不加第二个站点；发行版自带的 `:80` 站点按第 3 节由操作者删除 |
 
 **不要开放 18080。** 它只应在 loopback 上，由 `sshd` 绑定、由 Caddy 连接。检查方法见上面的 `ss -ltnp`。
 
-**对外只应有一个 HTTP 端口。** `ss -ltnp` 里除 `gateway.port` 与 `sshd` 之外的任何监听都要问清来路：多一个能吃 Cookie 的端口就多一条绕开第三层的路，理由见第 3 节的"只有一个 HTTP 入口"。插件只在 Caddyfile 里写两个站点，两者共用 `gateway.port`。
+**对外只应有一个 HTTP 端口。** `ss -ltnp` 里除 `gateway.port` 与 `sshd` 之外的任何监听都要问清来路：多一个能吃 Cookie 的端口就多一条绕开第三层的路，理由见第 3 节的"只有一个 HTTP 入口"。插件只在 Caddyfile 里写两个站点，两者共用 `gateway.port`；发行版自带的 `:80` 站点是最常见的那一个额外监听，按第 3 节删除。
 
 中继所在的云厂商安全组与主机防火墙都是**中继管理员**的职责，插件不改（改防火墙有把管理连接一起关掉的现实风险）。因此它是"必须成立的前置条件"之一，见 [security.md](../security.md)。
 
@@ -270,11 +279,11 @@ RFC 6265 第 8.3 节把这件事说得很直白：走安全信道时服务器应
 
 **第 1 层：只认公钥。** 即第 2 节的 `Match User relay` 与 `restrict` 前缀。这一层决定爆破能否成功，其余各层只决定噪声大小。
 
-**第 2 层：sshd 自带的来源惩罚（OpenSSH ≥ 9.8）。** `PerSourcePenalties` 自 9.8 起默认开启：`authfail:5s`、`invaliduser:5s`、`noauth:1s`、`grace-exceeded:10s`、`crash:90s`，累计到 `min:15s` 才开始拒绝，单一来源最多累计到 `max:10m`；`PerSourceNetBlockSize` 默认 `32:128`，按单个地址计算。用 `ssh -V` 确认版本：Ubuntu 22.04（8.9p1）与 24.04（9.6p1）都**没有**这个功能。
+**第 2 层：sshd 自带的来源惩罚（OpenSSH ≥ 9.8）。** `PerSourcePenalties` 自 9.8 起默认开启：`authfail:5s`、`invaliduser:5s`、`noauth:1s`、`grace-exceeded:10s`、`crash:90s`，累计到 `min:15s` 才开始拒绝，单一来源最多累计到 `max:10m`；`PerSourceNetBlockSize` 默认 `32:128`，按单个地址计算。用 `ssh -V` 确认版本：Ubuntu 22.04（8.9p1）与 24.04（9.6p1）都**没有**这个功能，而验证过的中继是 Ubuntu 26.04（codename `resolute`）上的 `OpenSSH_10.2p1 Ubuntu-2ubuntu3.2`，`persourcepenalties` 已按默认值生效。
 
 这里有一条与插件直接相关的相互作用：`authfail:5s` 配上 `min:15s` 意味着**连续三次认证失败就会触发拒绝**，而插件的重连退避序列从 1s 起。公钥配置错误（`authorized_keys` 权限不对、路径写错、`permitlisten` 端口与 `tunnel.relayPort` 不符）会让内网主机在十几秒内把自家出口 IP 送进惩罚名单，最长 10 分钟连不上，现象是"隧道连不上，手动 `ssh` 也连不上"。这是需要人工介入的故障，加大重试解决不了；出口 IP 固定时可用 `PerSourcePenaltyExemptList` 排除它，否则应当让它失败并告警。诊断入口见 [operations.md](operations.md)。
 
-**第 3 层：fail2ban 的 sshd jail（可选）。** 目标发行版没有内置惩罚时才需要补充。`deploy/fail2ban/jail.d/jail-sshd.local`：
+**第 3 层：fail2ban 的 sshd jail（可选）。** 目标发行版没有内置惩罚时才需要补充，验证过的 26.04 中继已有第 2 层，因此那里不需要装它。`deploy/fail2ban/jail.d/jail-sshd.local`：
 
 ```ini
 [sshd]
@@ -300,7 +309,7 @@ ignoreip = 127.0.0.1/8 <管理来源> <内网主机的公网出口 IP>
 ```ini
 # filter.d/caddy-dsh-relay.conf
 [Definition]
-failregex = ^.*"logger":"http\.log".*"remote_ip":"<HOST>".*"status":401.*$
+failregex = ^.*"logger":"http\.log".*"remote_ip":"<HOST>".*"status":401.*"Www-Authenticate".*$
 ignoreregex =
 ```
 
@@ -322,8 +331,8 @@ bantime  = 3600
 - 日志是 JSON 单行，`failregex` 按行匹配即可。`remote_ip` 在行里排在 `status` 之前，所以"取地址 + 判状态"可以写成一条正则，不需要 fail2ban 的 JSON 解析。实测这两个字段的顺序与上面一致，`Authorization` 头也已经被 Caddy 记成 `REDACTED`。
 - `port` 由引导按 `gateway.port` 替换；`logpath` 与 Caddyfile 的 `output file` 出自同一份模板，两者必须一致。
 - `bantime.increment` 值得开启：单用户场景下自己被封的概率很低，而攻击者会被指数推开。它是 `[DEFAULTS]` 段的设置，因此模板把它放在同一个文件里。
-- 规则同时捕获 Caddy 的 `basic_auth` 失败（401）与 DSH 自己返回的 401。后者通常意味着隧道通了但认证有问题，被一起封掉是可接受的副作用（并且它本身也可疑）。
-- Caddy 侧的 jail 由引导安装（第 7 步的一部分），因为它的 `logpath` 与 `port` 与 Caddyfile 出自同一份模板，手工同步容易错位。sshd 侧的 jail 不自动安装：它的 `ignoreip` 依赖用户才知道的内网出口地址，写错会连同隧道一起封掉，因此只作为模板提供。这两类文件的所有权约定（托管块、整文件标记）见 [deploy/README.md](../../deploy/README.md)。
+- 规则只统计网关口令失败：Caddy 的 `basic_auth` 拒绝请求时返回 `401` 并带上 `Www-Authenticate` 响应头，`failregex` 因此要求同一行同时出现 `"status":401` 与 `Www-Authenticate`。DSH 在浏览器还没有 DSH 会话 Cookie 时也回 `401`，但那条日志行带非空的 `user_id` 且没有 `Www-Authenticate`——首访时这是正常现象，把它计入会在正常使用中把操作者自己封掉。实测：连续六次这种 DSH 401 没有让 jail 的失败计数变化，一次错误口令则让它加一。
+- Caddy 侧的 jail 由引导安装（第 9 步的一部分），因为它的 `logpath` 与 `port` 与 Caddyfile 出自同一份模板，手工同步容易错位。sshd 侧的 jail 不自动安装：它的 `ignoreip` 依赖用户才知道的内网出口地址，写错会连同隧道一起封掉，因此只作为模板提供。这两类文件的所有权约定（托管块、整文件标记）见 [deploy/README.md](../../deploy/README.md)。
 - fail2ban 的封禁动作默认走 iptables；中继上只有 `nft` 而没有 `iptables` 兼容层时，要在 `[DEFAULTS]` 里把 `banaction` 换成 `nftables-multiport`，否则 jail 会启动但一条规则都装不上。
 
 网关口令是这条通路上唯一可猜的凭据，爆破在这一层就被挡住，不会打到内网主机。
@@ -338,7 +347,7 @@ bantime  = 3600
 6. **不配置 `trusted_proxies`。** 前面没有别的代理；配置它会引入 XFF 伪造面。
 7. **不把 CA 私钥复制出来。** 根证书只有公钥，可以公开分发；私钥留在 Caddy 的数据目录里。
 8. **不让插件改防火墙与全局 sshd 认证策略。** 这两处的错误会把管理员锁在门外。
-9. **不让转发前预检做第二件事。** 它只查 `tunnel.relayPort`、只杀属主为 `relay` 的 `sshd` 进程。"顺手重启 Caddy""顺手清日志"之类的动作都不属于它——这是整份设计里唯一一处运行期提权，面越窄越好。
+9. **不让转发前预检做第二件事。** 它只查 `tunnel.relayPort`、只杀属主为 `relay`、可执行文件为 `sshd` 或 `sshd-session` 的进程。"顺手重启 Caddy""顺手清日志"之类的动作都不属于它——这是整份设计里唯一一处运行期提权，面越窄越好。
 
 ## 7. 部署后自检清单
 
@@ -347,8 +356,8 @@ bantime  = 3600
 ```
 # 中继主机
 ss -ltnp | grep -E '18080|8443'         # 18080 必须是 127.0.0.1
-ss -ltnp                                # 对外只应有 8443 与 sshd，见第 3 节
-sshd -T -C user=relay,host=relay,addr=127.0.0.1 | grep -iE 'gatewayports|permitopen|allowtcpforwarding'
+ss -ltnp                                # 对外只应有 8443 与 sshd；出现 :80 说明发行版自带的站点还没删，见第 3 节
+sshd -T -C user=relay,host=relay,addr=127.0.0.1 | grep -iE 'gatewayports|permitopen|allowtcpforwarding|permittty|clientaliveinterval|clientalivecountmax|unusedconnectiontimeout'
 
 # 未认证：期望 401，且响应里没有 set-cookie
 curl -sS --cacert <ca> -D- -o /dev/null https://<authority>/ | grep -iE '^HTTP|^set-cookie'

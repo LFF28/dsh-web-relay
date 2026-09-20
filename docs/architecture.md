@@ -79,7 +79,7 @@ Host 半边（`lib/index.js`）暴露一个 `dsh-web-relay` 插件，内部按�
 | `tunnel` | 转发前预检（清掉上一轮残留的监听端点）、SSH 反向转发子进程的生命周期、退避、健康判定、拆除，见 [modules/tunnel.md](modules/tunnel.md) |
 | `entry` | `/relay/enter`（只把启动令牌换成 DSH Cookie）与 `/relay/ca.crt` 两条精确路由，见 [modules/entry.md](modules/entry.md) |
 
-Client 半边（`lib/client.js`）只做一件事：向 `settings.plugin.item` 注册一张以命名空间 `web-relay` 为键的设置卡片。卡片自绘表单与状态区，只依赖平台模块表里的 `react`、`react/jsx-runtime`、`@deepseek-ai/dsh-client-store`、`@deepseek-ai/dsh-client-ui-primitives`，其余全部走服务：`ctx.slots`、`ctx.settingsScope`、`ctx.locale`。
+Client 半边（`lib/client.js`）只做一件事：向 `plugins.item` 注册一张以 `web-relay` 为 `id` 的设置卡片。卡片自绘表单与状态区，只依赖平台模块表里的 `react`、`react/jsx-runtime`、`@deepseek-ai/dsh-client-store`、`@deepseek-ai/dsh-client-ui-primitives`，其余全部走服务：`ctx.slots`、`ctx.settingsScope`、`ctx.locale`。
 
 ## 服务
 
@@ -89,7 +89,7 @@ Client 半边（`lib/client.js`）只做一件事：向 `settings.plugin.item` �
 | --- | --- |
 | `trustedHosts: string[]` | 当前应当被围栏接受的权威，取自 settings；未配置时为空数组。每次读取返回新数组，表达式可以安全展开 |
 | `authority(): string \| undefined` | 当前权威，形状为 `host[:port]` |
-| `status(): RelayStatus` | 引导状态、隧道状态、最近错误、观察到的指纹、最近一次转发前预检，供卡片回显与运行手册引用 |
+| `status(): RelayStatus` | 引导状态、隧道状态、最近错误、观察到的指纹、最近一次转发前预检，供运行手册与诊断引用 |
 
 ## 启动时序
 
@@ -107,6 +107,6 @@ Client 半边（`lib/client.js`）只做一件事：向 `settings.plugin.item` �
 - 中继上只有一个 HTTP 端口（`gateway.port`），且只有 loopback 上的 `18080` 作为它的上游。
 - 每个经过中继的 `Set-Cookie` 都带 `Secure`；DSH 自己不下发这一位，由上游定义里的 `header_down` 补上。
 - 中继上的反向转发端点永远只在 loopback。
-- 转发前预检只对持有 `tunnel.relayPort`、`/proc/<pid>/exe` 指向 `sshd`、且属主为 `relay` 的进程动手；其余情况一律停手并记录。
+- 转发前预检只对持有 `tunnel.relayPort`、`/proc/<pid>/exe` 是 `sshd` 或 `sshd-session`、且属主为 `relay` 的进程动手；其余情况一律停手并记录。
 - 浏览器只与中继说话，永不直连内网主机。
 - 插件在中继上留下的每样东西都在 `/etc/dsh-web-relay` 与 `/etc/caddy/Caddyfile` 的两个带标记的托管块里，卸载路径见 [modules/operations.md](modules/operations.md)。

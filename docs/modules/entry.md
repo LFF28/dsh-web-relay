@@ -27,13 +27,15 @@ GET /relay/ca.crt    # 中继 CA 根证书副本
 3. 向浏览器回 303，Location 为 /，原样转发 Set-Cookie
 ```
 
-第 1 步是关键的复用点：启动令牌来自 `ctx.connection.authenticatedUrl(...)`，它是 DSH 的公开方法，把"本进程当前的启动令牌"拼到给定 URL 上。插件因此**永远不接触签名密钥**，也不需要知道 Cookie 是怎么生成的。那一跳走的是 DSH 自己的 `authorizeIndex()`，与 `dsh web` 在 LAN 上的行为完全一致。
+第 1 步是关键的复用点：启动令牌来自 `ctx.connection.authenticatedUrl(...)`，它是 DSH 的公开方法，把"本进程当前的启动令牌"拼到给定 URL 上。插件因此**永远不接触签名密钥**，也不需要知道 Cookie 是怎么生成的。那一跳走的是 DSH 自己的 `authorizeIndex()`，与 `dsh web` 在 LAN 上的行为完全一致。实测浏览器看到的响应是 `303`、`location: /`，且只有一条 `Set-Cookie`。
 
 这一跳必须用 `node:http` 发，不能用 `fetch`：令牌的校验依据是请求的 `Host`，而 `Host` 在 fetch 规范里是禁止修改的头，undici 会拒绝设置。用 `fetch` 时 Host 会是 `127.0.0.1:<dshPort>`，权威对不上，签出的 Cookie 名字与受众都会是错的。`node:http` 没有这个限制，也不需要引入任何依赖。
 
 `ctx.connection` 通过 `ctx.inject(['connection'], (c) => ...)` 获取，不放进顶层 `inject`（那会与 `connection` 行注入 `webRelay` 形成等待环），与 `@deepseek-ai/dsh-client-connection` 自己用 `ctx.inject(['webServer'], ...)` 的写法一致。
 
-`/relay/ca.crt` 读 `$DSH_HOME/dsh-web-relay/ca/root.crt`（引导第 10 步取回，`0644`），以 `application/x-x509-ca-cert` 与 `Content-Disposition: attachment; filename="dsh-web-relay-ca.crt"` 返回。文件不存在时返回 404 而不是 500——"还没引导"是正常状态。它与 `/relay/enter` 的可用性无关，因此不受 `entry.enabled` 影响；服务器本机的 `http://127.0.0.1:<dshPort>/relay/ca.crt` 同样可取，取证书因而**不必先过一次公网 TLS 握手**。
+`/relay/ca.crt` 读 `$DSH_HOME/dsh-web-relay/ca/root.crt`（引导第 10 步取回，`0644`），以 `application/x-x509-ca-cert` 与 `Content-Disposition: attachment; filename="dsh-web-relay-ca.crt"` 返回。引导还没产出证书时它回答 `404`。公网上的这一条在网关口令之后，与其他路径一样要先通过 `basic_auth`；它与 `/relay/enter` 的可用性无关，因此不受 `entry.enabled` 影响。第一台设备因此不能靠"信任一个自己还不信任的 TLS 端点"取到根证书：要么从服务器本机取（`http://127.0.0.1:<dshPort>/relay/ca.crt`，或直接复制 `$DSH_HOME/dsh-web-relay/ca/root.crt`）再经本地复制、AirDrop、聊天软件等不依赖 TLS 信任的渠道送到设备，要么在设备上用 `curl -k -u me:<password> https://<publicAuthority>/relay/ca.crt` 取。
+
+直接打开 `https://<publicAuthority>/`（不带 `/relay/enter`）不会进入入口：浏览器还没有 DSH 会话 Cookie 时它得到 DSH 自己的 `401` 与 `unauthorized` 响应体，并停在那一页。Caddy 不会把它改写成跳转，也没法改写：`handle_errors` 只处理 Caddy 自己的处理错误（502 一类），不改变上游透传的 4xx。因此入口地址只能由卡片与引导横幅告诉操作者，不存在"首次访问自动带路"。
 
 ## 入口 URL 从哪来
 
@@ -61,18 +63,15 @@ GET /relay/ca.crt    # 中继 CA 根证书副本
 
 ## 启动横幅
 
-引导、隧道与自检都就绪后（或自检超时后），打印一次：
+引导、隧道与自检都就绪后（或自检超时后），插件向 stdout 打印一行入口地址，形如 harness 自己打印的 `dsh web:` 那一行：
 
 ```
-dsh-web-relay: 远程入口已就绪
-  入口       https://<publicAuthority>/relay/enter   （收藏这一条，不含任何秘密）
-  中继 CA    指纹 SHA256:… ，下载 https://<publicAuthority>/relay/ca.crt
-  隧道       running (since 12:04:31, 连接成功 1 次)
+dsh-web-relay: https://<publicAuthority>/relay/enter
 ```
 
-横幅里的 CA 指纹与卡片状态区的同一个字段一致，可在中继上对 `data/pki/authorities/dsh-relay/root.crt` 核对。
+之所以直接写 stdout，是因为本构建的日志服务没有 console exporter：逐步引导进度走 harness 日志，持久状态写进 `web-relay-record` 记录，只有入口 URL 需要操作者在终端上直接看到。CA 指纹与下载地址都在记录的 `caFingerprint` / `caUrl` 里，与卡片状态区一致，可在中继上对 `data/pki/authorities/dsh-relay/root.crt` 核对。
 
-横幅不含任何秘密，因此没有"何时打印"的策略开关。它只在启动时打印，不进入浏览器可见面，因此不需要客户端本地化与快照测试。横幅内容经过一次检查：只写日志，不写任何 HTTP 响应体。
+这一行不含任何秘密，因此没有"何时打印"的策略开关。它只在启动时打印，不进入浏览器可见面，因此不需要客户端本地化与快照测试；它不写任何 HTTP 响应体。
 
 ## 明确不做
 

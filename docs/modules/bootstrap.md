@@ -56,11 +56,11 @@
 | 6 | 写 `sshd` 片段并校验重载 | 块级替换 + `sshd -t` | `sshd -t` 不通过就不重载，回滚该文件 |
 | 7 | 安装 Caddy 与 fail2ban | `command -v caddy` / `command -v fail2ban-server` 命中即跳过 | Debian/Ubuntu 之外停在这里，打印需要手动执行的命令 |
 | 8 | 计算网关口令哈希 | 每次都重算（口令可能刚改） | 停在这里，Caddyfile 不更新 |
-| 9 | 写 Caddyfile 与 Caddy 侧 jail，格式化、校验并重载 | 块级替换 + `caddy validate` | 校验不通过就不重载，公网入口保持旧配置 |
+| 9 | 写 Caddyfile、格式化、校验并 reload，再写 Caddy 侧 fail2ban filter 与 jail 并 reload fail2ban | 块级替换 + `caddy validate` | 校验不通过就不重载，公网入口保持旧配置 |
 | 10 | 取回 CA 根证书 | 文件已存在即跳过取回 | 停在这里；服务仍可用，只是拿不到根证书 |
 | 11 | 注册权威并自检 | 幂等赋值 | 停在这里，手机打开会 403 |
 | 12 | 拉起隧道 | 见 [tunnel.md](tunnel.md) | 停在这里，公网入口返回隧道不可达页面 |
-| 13 | 公网自检并输出入口 URL | 只读 | 记录里标出观察到的状态码，服务可能已可用 |
+| 13 | 公网自检、报告中继对外监听并输出入口 URL | 只读 | 记录里标出观察到的状态码与对外监听清单，服务可能已可用 |
 
 ### 0–3 建立可信连接
 
@@ -100,11 +100,13 @@ Match User relay
     AllowAgentForwarding no
     PermitTunnel no
     PermitTTY no
+    ClientAliveInterval 15
+    ClientAliveCountMax 3
 ```
 
-`AllowTcpForwarding remote` 只允许远端口转发（内网主机拨出要的正是这个），`PermitOpen none` 禁掉本地转发，`GatewayPorts no` 保证监听不绑到公网接口。
+`AllowTcpForwarding remote` 只允许远端口转发（内网主机拨出要的正是这个），`PermitOpen none` 禁掉本地转发，`GatewayPorts no` 保证监听不绑到公网接口。`ClientAliveInterval 15` 与 `ClientAliveCountMax 3` 让对端已经消失的转发会话在约 45 秒内被丢弃，不然它会一直占着中继上的监听端点。
 
-校验顺序是硬的：先 `sshd -t`，通过才 `systemctl reload ssh`。`sshd -t` 不通过就不重载并回滚文件——一台把自己锁在门外的中继比没配置好的中继糟得多。重载后再用 `sshd -T -C user=relay,host=relay,addr=127.0.0.1` 读一遍生效值，确认 `gatewayports no`、`permitopen none` 与允许的转发方向都在，命令原文见 [relay-host.md](relay-host.md)。
+校验顺序是硬的：先 `sshd -t`，通过才 `systemctl reload ssh`。`sshd -t` 不通过就不重载并回滚文件——一台把自己锁在门外的中继比没配置好的中继糟得多。重载后再用 `sshd -T -C user=relay,host=relay,addr=127.0.0.1` 读一遍生效值，逐个确认 `gatewayports`、`permitopen`、`allowtcpforwarding`、`permittty`、`clientaliveinterval`、`clientalivecountmax`、`unusedconnectiontimeout` 七项；`unusedconnectiontimeout` 是全局选项，不能写进 `Match` 块，引导只报它的生效值 `none`，不设它，命令原文见 [relay-host.md](relay-host.md)。
 
 ### 7 安装 Caddy 与 fail2ban
 
@@ -118,6 +120,8 @@ chmod o+r /usr/share/keyrings/caddy-stable-archive-keyring.gpg /etc/apt/sources.
 apt-get update && apt-get install -y caddy
 systemctl enable --now caddy
 ```
+
+Ubuntu 26.04 的 universe 里有 `caddy 2.6.2-14`，而这个 `deb … any-version main` 源发布 2.11.4，`apt` 按版本取胜，因此最终装到的是 2.11.4。全新的 26.04 主机上既没有 `caddy` 可执行文件也没有 `/etc/caddy` 目录，两者都由这个包提供。
 
 那两条 `chmod o+r` 来自官方安装说明，不是可省的客套：Caddy 以 `caddy` 账号运行，密钥环与源列表不可读时会牵连后续的 `apt` 操作。
 
@@ -137,7 +141,7 @@ fail2ban 用发行版包（`apt-get install -y fail2ban`）即可，`deploy/fail
 
 写完后先 `caddy fmt --overwrite`，再校验：`caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile`。校验要在 `caddy` 账号的环境里跑（`XDG_DATA_HOME=/var/lib/caddy/.local/share`、`XDG_CONFIG_HOME=/var/lib/caddy/.config`），否则本地 CA 的数据目录解析不到，校验会报出一个与配置无关的错。校验通过才 `systemctl reload caddy`；reload 是优雅的，失败时旧配置继续服务。
 
-同一步里写 Caddy 侧的 fail2ban jail（`deploy/fail2ban/`，端口与 `logpath` 由模板代入），然后 `fail2ban-client reload`。jail 写坏不会影响已经工作的入口，因此它的失败不阻断引导，只在步骤结果里标出。
+Caddy reload 之后，同一步再写 Caddy 侧的 fail2ban filter 与 jail（`deploy/fail2ban/`，端口与 `logpath` 由模板代入），然后 `fail2ban-client reload`。jail 写坏不会影响已经工作的入口，因此它的失败不阻断引导，只在步骤结果里标出。
 
 ### 10 CA 根证书
 
@@ -157,7 +161,9 @@ Caddy 的本地 CA 在配置装载时就生成，根证书在 `/var/lib/caddy/.l
 
 隧道按 [tunnel.md](tunnel.md) 拉起，等它活过 `tunnel.healthyAfterMs` 再判成功。随后做一次真实公网请求：`curl -sS -o /dev/null -w '%{http_code}' https://<publicAuthority>/`，带上第 10 步取回的根证书作 `--cacert`；根证书没取到时退回 `-k` 并把这一点写进记录，因为这条证据这时只说明"链路上有人应答"，不说明对端身份。期望 401（未带网关口令）或 200（带了）。
 
-最后写完整记录、打印横幅：权威、入口 URL、CA 下载地址与指纹、隧道 PID、本次引导的步骤摘要。
+公网探测之后，第 13 步再在中继上跑一次 `sudo -n ss -ltnpH`，把结果追加进该步记录的 `detail`，写成 `中继对外监听：…`。本地地址落在 `127.0.0.0/8` 或等于 `[::1]` 的监听被跳过，其余一律列出——`*:8443`、`0.0.0.0:22`、`[::]` 以及某个具体地址都会出现。验证过的中继上原始输出是 `*:80、*:8443、0.0.0.0:22、127.0.0.53%lo:53、127.0.0.54:53、[::]:22`，过滤后的清单是 `*:80、*:8443、0.0.0.0:22、[::]:22`。
+
+最后写完整记录，并向 stdout 打印一行 `dsh-web-relay: https://<publicAuthority>/relay/enter`；逐步进度走 harness 日志，权威、CA 下载地址与指纹、隧道 PID 与本次引导的步骤摘要都落在记录里。
 
 ## 重入与部分失败
 

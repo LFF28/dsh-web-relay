@@ -1,6 +1,6 @@
-# 后续项与验证计划
+# 后续项与假设核对
 
-本文件回答两个问题：这份设计明确**不做**什么，以及实现阶段还剩哪些假设需要一次真实运行来确认。已经验证过的结论写在对应模块文档里，不在这里重复。
+本文件回答两个问题：这份设计明确**不做**什么，以及各条设计假设与它们的核对方式。已经验证过的结论写在对应模块文档里，不在这里重复。
 
 ## 明确不做
 
@@ -17,9 +17,9 @@
 | 远程改配置 | 这是 DSH 对非 loopback 页面的既定行为，任何绕过它的做法都要在插件里另建一套配置面，规模远超本设计 |
 | 中继侧定时清理监听残留 | 那需要在中继上装一个常驻单元，破坏"中继上不安装本项目的任何代码"这条；主机侧的转发前预检在需要时做同一件事，且不留下常驻物 |
 
-## 实现阶段的验证计划
+## 假设与核对方式
 
-下面每一项都是"按源码与文档推导、但只能靠一次真实运行确认"的假设。已经用真实 Caddy（v2.10.0）在 loopback 上验证过的部分——Host 透传、`handle_errors` 接住合成 502、会话 Cookie 与 Basic 两种 WebSocket 升级、未声明 Host 的兜底、证书有效期配对、未认证响应不得带 `Set-Cookie`、给 DSH 的 Cookie 补 `Secure`（含定点匹配、站点级 `header` 的未延迟与延迟两种写法）、日志打码——不在此列，它们的结论与证据写在 [modules/relay-host.md](modules/relay-host.md) 与 [security.md](security.md)。
+下表列出设计所依据的假设、若错的后果与各自的核对方式。已经用真实 Caddy 验证过的部分——设计期在 loopback 上用 v2.10.0，部署的中继在 Ubuntu 26.04 上装到 2.11.4 并同样验证通过——Host 透传、`handle_errors` 接住合成 502、会话 Cookie 与 Basic 两种 WebSocket 升级、未声明 Host 的兜底、证书有效期配对、未认证响应不得带 `Set-Cookie`、给 DSH 的 Cookie 补 `Secure`（含定点匹配、站点级 `header` 的未延迟与延迟两种写法）、日志打码——不在此列，它们的结论与证据写在 [modules/relay-host.md](modules/relay-host.md) 与 [security.md](security.md)。
 
 | 假设 | 依据 | 若错的后果 | 验证方式 |
 | --- | --- | --- | --- |
@@ -37,4 +37,4 @@
 | 转发失败的两种原因只能从中继 `sshd` 日志区分 | 客户端两条路径都收敛成 `SSH2_MSG_REQUEST_FAILURE` | 把配置错当成端口残留，预检反复空跑 | 临时把 `permitlisten` 改成别的端口，观察中继日志出现 `but the request was denied.` |
 | 管理账号的免密 sudo 在非交互调用下成立 | 用户在中继上预先配好；第 3 步用 `sudo -n true` 探测 | 引导停在提权步骤，`sshd` 片段与 Caddyfile 都写不下去 | 中继上跑 `sudo -n true; echo $?`，期望 0；再关掉免密验证它确实报 `a password is required` |
 
-除客户端卡片那两项外，其余都要求一台真实 VPS 与一台运行 `dsh web` 的内网主机。建议按 [modules/bootstrap.md](modules/bootstrap.md) 的步骤顺序逐项推进，因为前四项会在 profile 启动时就暴露，后面的项才需要走完引导。
+除客户端卡片那两项外，其余各项的核对都需要一台真实 VPS 与一台运行 `dsh web` 的内网主机；验证过的中继就是这样一组机器。前四项在 profile 启动时就会暴露，后面的项要按 [modules/bootstrap.md](modules/bootstrap.md) 的步骤顺序走完引导。

@@ -24,7 +24,7 @@
 | 远端端点端口 | 包内 `tunnel.relayPort`（默认 `18080`） | 有默认值，必须与中继的 `permitlisten` 与 Caddy 上游一致 |
 | 重连退避、健康阈值、拆除宽限 | 包内 `tunnel.*` | 见 [configuration.md](../configuration.md) |
 
-隧道本身用的是**中继专用账号**与**本机专用私钥**（引导第 0–1 步生成在 `$DSH_HOME/dsh-web-relay/ssh/relay_ed25519`，`0600`），不是 `vps.user` 的管理身份。但这条通路还有一处用到管理身份：转发前预检要用 `vps.user` 的密钥连上中继跑一条只读检查（见下）。因此"管理账号被撤销不影响隧道"只剩一半成立——端口空闲时隧道照旧建立，只有从端口残留里恢复才需要它。
+隧道本身用的是**中继专用账号**与**本机专用私钥**（引导第 0–1 步生成在 `$DSH_HOME/dsh-web-relay/ssh/relay_ed25519`，`0600`），不是 `vps.user` 的管理身份。但这条通路还有一处用到管理身份：转发前预检要用 `vps.user` 的密钥连上中继，以 `sudo -n` 做端口探测并在需要时清掉残留（见下）。因此"管理账号被撤销不影响隧道"只剩一半成立——端口空闲时隧道照旧建立，只有从端口残留里恢复才需要它。
 
 ## 子进程规格
 
@@ -61,23 +61,23 @@ ssh
 
 ## 转发前预检
 
-`sshd` 为 `-R` 绑的监听端点属于**中继上处理那次连接的会话子进程**。主机侧异常中断（断电、休眠、网络切换、NAT 重绑定）不发出 FIN，中继察觉不到对端已经消失，那个子进程会继续占着 `127.0.0.1:<relayPort>`。默认配置下这个窗口最长约 2 小时 11 分（`ClientAliveInterval` 默认 0，只剩内核 keepalive：`tcp_keepalive_time` 加上 `tcp_keepalive_probes × tcp_keepalive_intvl`），期间任何新的 `-R` 都在服务端以 `bind: Address already in use` 失败，客户端因 `ExitOnForwardFailure=yes` 退出并进入退避。
+`sshd` 为 `-R` 绑的监听端点属于**中继上处理那次连接的会话子进程**。主机侧异常中断（断电、休眠、网络切换、NAT 重绑定）不发出 FIN，中继察觉不到对端已经消失，那个子进程会继续占着 `127.0.0.1:<relayPort>`。中继的 `sshd` 片段给 `relay` 用户设了 `ClientAliveInterval 15` 与 `ClientAliveCountMax 3`，所以这种会话在约 45 秒内被丢弃、监听端点随之消失；在此之前任何新的 `-R` 都在服务端以 `bind: Address already in use` 失败，客户端因 `ExitOnForwardFailure=yes` 退出并进入退避。
 
 因此每轮 spawn 之前先做一次预检，把端口腾出来：
 
 ```
-1. 用 vps.* 的身份连中继，运行 ss -ltnH 'sport = :<relayPort>'
+1. 用 vps.* 的身份连中继，运行 sudo -n ss -ltnH 'sport = :<relayPort>'
 2. 输出为空              → 端口空闲，直接 spawn
-3. 输出非空              → 取出持有者 pid，核对它是 sshd 且属主是 relay
+3. 输出非空              → 读出持有者 pid，核对它的可执行文件是 sshd 或 sshd-session，且属主是 relay
 4. 核对通过              → sudo kill，轮询（上限 2 秒）到端口消失，再 spawn
 5. 核对不通过，或预检本身出错 → 不动手，记录原因，照常 spawn
 ```
 
 预检连接复用隧道的 SSH 参数（`BatchMode=yes`、`StrictHostKeyChecking=yes`、同一个 `knownHostsFile`、`ConnectTimeout`），只把身份从 `relay` 换成 `vps.user`。
 
-第 1 步不需要特权：`ss -ltn` 对任何用户都列出全部监听端点，只有 `-p` 才需要权限，另一个用户的进程在 `-p` 下不显示。提权只发生在第 4 步，也就是端口确实被占、且持有者核对通过的时候——正常重连不碰 `sudo`。
+预检的每一步都经管理账号的 `sudo -n` 执行：端口探测是 `sudo -n ss -ltnH 'sport = :<relayPort>'`，读出持有者 pid（带 `-p` 的 `ss`）与读 `/proc/<pid>/exe` 同样需要 root——不加 `sudo` 时 `users:(...)` 整列不会出现。`-n` 是有意的：账号免密时直接执行，需要口令时立即失败并记录 `skipped`，不会挂起等一个永远不来的输入。
 
-**为什么杀它是安全的。** 按 [security.md](../security.md) 的前提，能建立反向转发的只有内网主机那把公钥，所以这个端口上的 `sshd` 端点只可能来自本部署的旧会话。预检不把这个推论当结论，而是逐条核对持有者：`/proc/<pid>/exe` 必须指向 sshd，进程属主必须是 `relay`。两条有一条不成立就停手——那个端口上可能是别的东西，杀掉它属于越界。这道核对限制的是**插件的失误**，不是被入侵的内网主机：那台主机本来就持有 `vps.identityFile` 与中继上的免密 `sudo` 权限，见 [security.md](../security.md) 的"中继侧的最小权限"。
+**为什么杀它是安全的。** 按 [security.md](../security.md) 的前提，能建立反向转发的只有内网主机那把公钥，所以这个端口上的 `sshd` 端点只可能来自本部署的旧会话。预检不把这个推论当结论，而是逐条核对持有者：`/proc/<pid>/exe` 必须是 `sshd` 或 `sshd-session`，进程属主必须是 `relay`。验证过的中继上持有转发监听端点的就是 `/usr/lib/openssh/sshd-session`（属主 `relay`，`ss` 显示为 `users:(("sshd-session",pid=N,fd=12))`）。两条有一条不成立就停手——那个端口上可能是别的东西，杀掉它属于越界。这道核对限制的是**插件的失误**，不是被入侵的内网主机：那台主机本来就持有 `vps.identityFile` 与中继上的免密 `sudo` 权限，见 [security.md](../security.md) 的"中继侧的最小权限"。
 
 **预检失败不是致命错误。** 它是一次修复，不是一道门。管理身份不可用（密钥被撤销、账号被禁用、`sudo` 需要口令、`ss` 没装）时预检记录原因后跳过，spawn 照常进行：端口空闲时隧道照旧建立，端口被占时按原有方式失败。这样"端口空闲"这条常见路径不依赖管理身份。
 
@@ -101,7 +101,7 @@ ssh
 - **单实例**：任何时刻最多一个隧道子进程，预检子进程与它串行、不并发。每轮开始前必须确认上一轮的句柄都已经 `done`，不允许叠加。
 - **`starting` 的两种失败**：`spawn()` 同步抛错（例如 `cwd` 无效），或子进程立刻以非 0 退出（认证失败、端口被占）。两者都进入 `backing-off`。
 - **退避**：`tunnel.backoffMs` 默认 `[1000, 2000, 5000, 15000, 30000]`，用尽后停在最后一项。稳定的失败（配置错、公钥不在中继上）会以 30s 周期重试并把 stderr 打出来，一眼可见且不刷屏。
-- **健康判据**：仅凭"进程还活着"不足够，因为 `ssh -N -R` 在转发建立后会长期存活——这没问题，`ExitOnForwardFailure=yes` 已经保证"转发没成功就退出"。因此"存活超过 `tunnel.healthyAfterMs`"作为重置退避的信号。这个判据是启发式的，所以退避序列必须有小起点（1s），不能一上来就 30s。
+- **健康判据**：仅凭"进程还活着"不足够，因为 `ssh -N -R` 在转发建立后会长期存活——这没问题，`ExitOnForwardFailure=yes` 已经保证"转发没成功就退出"。因此"存活超过 `tunnel.healthyAfterMs`"作为重置退避的信号。`running` 只表示"进程已经活过 `healthyAfterMs`"，不表示此刻有请求真的穿过隧道。这个判据是启发式的，所以退避序列必须有小起点（1s），不能一上来就 30s。
 - **首轮不等退避**：参数齐全时立即开始第一轮（预检 → spawn），不延迟。启动自检需要一个已经在走的隧道。
 
 ## 什么时候起、什么时候停
@@ -115,6 +115,8 @@ ssh
 | `vps.host` / `vps.port` / `vps.user` / `vps.identityFile` 变化 | 停掉旧子进程，用新参数重新起（不需要重启 profile）；新凭据同时用于预检 |
 | `ctx.webServer` 的端口变化 | 同上；端口只在 DSH 重启时才会变，实际等于一起重启 |
 
+引导记录已是 `ready` 且权威没变时，重启 DSH 不会重跑引导，但隧道会被重新建立：它是一条活的连接，不随进程重启存活。要再跑一遍引导只能显式触发"重新引导"。
+
 ## 生命周期与释放
 
 按防御性设计的既有要求（DSH 仓库的 `docs/defensive-patterns.md`，本插件遵循同一套约定），释放必须到达静默（quiescence）：
@@ -126,7 +128,7 @@ ctx.effect(() => {
   let preflight: SubprocessHandle | undefined       // 预检子进程
   let stopped = false
 
-  const loop = async () => { /* 退避 → 预检 → spawn → await done → 循环 */ }
+  const loop = async () => { /* 退避 → 预检 → spawn → 等 done/waitForExit → 确认范围为空 → 循环 */ }
   const run = loop()                                 // 首轮同步起预检，不 await；释放路径负责收敛
 
   return async () => {
@@ -135,21 +137,24 @@ ctx.effect(() => {
     for (const handle of [preflight, child]) {
       if (handle) {
         handle.terminate()                           // 2. 再终止活着的子进程
-        await handle.done.catch(() => {})            // 3. 等到它真的结束
+        await Promise.race([handle.done, handle.waitForExit()]).catch(() => {})   // 3. done 与 waitForExit 谁先落地
+        await waitForEmptyProcessRange(graceMs + 1000)                            // 4. 有界地等进程范围变空
       }
     }
-    await run.catch(() => {})                        // 4. 等循环自身落到终态
+    await run.catch(() => {})                        // 5. 等循环自身落到终态
   }
 })
 ```
 
 `ctx.effect` 的回调在注册时立即执行，`loop()` 的第一轮在第一个 `await` 之前同步跑到预检连接的 `spawn()`，因此 `apply` 返回时预检已经在跑，无需把 `apply` 变成异步。循环体内部的每次重试都由 `setupAbort` 与 `stopped` 守卫。
 
-顺序是有要求的：先关掉"会产生新子进程"的那条线，再杀已有的，最后等所有 await 落地。反过来的话，循环可能在杀进程与等 `done` 之间又起一个新的，那个子进程将不属于任何人的清理范围。两种子进程都要走这一遍：预检可能停在 `ss` 的输出上，隧道可能停在转发上，各自都要等到 `done` 才算拆除完成。
+顺序是有要求的：先关掉"会产生新子进程"的那条线，再杀已有的，最后等所有 await 落地。反过来的话，循环可能在杀进程与确认范围为空之间又起一个新的，那个子进程将不属于任何人的清理范围。两种子进程都要走这一遍：预检可能停在 `ss` 的输出上，隧道可能停在转发上，各自都要等到进程范围为空才算拆除完成。
 
-`graceMs` 用尽后 seam 会升级到 `SIGKILL`；`await done` 仍然会解析（`done` 只在 spawn 或 provider 层失败时 reject）。
+拆除的等待是**有界**的：`stop()` 先 `setupAbort.abort()` 让重连循环停止产生新子进程，再对当前句柄调 `terminate()`，然后以 `tunnel.graceMs` 加 1 秒为上限，等这个进程范围变空。必须等到它真的消失，是因为转发的监听端点在中继上，只有进程退出时才会被释放；不等它就起下一次连接，新连接会因端口仍被占而 `ExitOnForwardFailure` 失败。`graceMs` 用尽后 seam 会升级到 `SIGKILL`；`done` 只在 spawn 或 provider 层失败时 reject，所以拆除要等到进程范围真的为空，而不是只等 `done` 落地。
 
 参数变化时的重建走同一条路径：先按上面的顺序拆掉当前这一份，再用新参数注册一份新的。旧的一份不到静默就不建新的，因此不会出现两个子进程同时持有同一个远端监听。
+
+每一次连接尝试也不是只等 `done`：它以句柄的 `done` promise 与 `waitForExit()` 谁先落地为准，随后再确认进程范围为空，才把句柄忘记。这样即使某个 `done` 永不落地，也不会让上报的状态卡在 `running` 而实际没有任何监听。
 
 ## 诊断
 
@@ -157,7 +162,7 @@ ctx.effect(() => {
 
 - `stderr` 以 `maxBytes` 收集，把每个子进程最后一段输出留在内存里；退出时连同 `exitCode` 一起写日志，并在 `status()` 里保留最后一次失败摘要。
 - **不转储到文件**，也不把 stderr 塞进 `status()` 的返回结构体内（它可能包含主机路径）。日志一行摘要足够定位。
-- 启动横幅里同时打印一次人类可读的复现命令（把 `argv` 原样拼出来），让操作者能手工跑一次看到完整输出。
+- 日志里同时打印一次人类可读的复现命令（把 `argv` 原样拼出来），让操作者能手工跑一次看到完整输出。
 
 ### 转发失败怎么分辨原因
 

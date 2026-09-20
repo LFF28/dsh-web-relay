@@ -11,6 +11,8 @@
 
 `web-relay` 用 `installSection`，因为它需要 `setSource`/`onChange` 这对钩子：`setSource` 让插件始终持有"当前权威值"的取值函数（settings 服务在时取设置层，服务不在时回落到组合层默认值）；`onChange` 在用户保存、设置文档被外部改动、以及设置服务挂载或卸载时都会触发，插件在这里做一次规范化并决定要重做什么。注册时传 `applies: 'live'`，描述符会如实告诉界面这些改动不需要重启。
 
+`settings.yaml` 被监听（约 100 ms 去抖），提供方通过比对文件内容抑制自己写出的那次变更，因此手工编辑这个文件与在卡片里保存等效，都会走同一个 `onChange`，都不需要重启 `dsh web`。
+
 `web-relay-record` 用 `register`，因为它需要返回的作用域去写：插件通过 `scope.replace(section)` 发布整份记录。它同样带一个 `validate`，用交叉字段约束挡住"插件不该接受的组合"，让写入方在 `update`/`replace` 时就失败，而不是存下一个会让拥有者静默失效的值。
 
 两个命名空间都注册在插件的 fiber 上，所以卸载插件会连同命名空间和观察者一起消失。
@@ -19,24 +21,26 @@
 
 卡片是插件唯一的用户界面，也是首次配置的入口。
 
-**注册。** 客户端半边向 `settings.plugin.item` 注册一条以命名空间为键的条目：
+**注册。** 客户端半边向 `plugins.item` 注册一张卡片。该槽位是 `kind: 'list'`、`scope: 'root'`，拥有者每次渲染都拿到 `{ view: 'summary' | 'page' }`：`summary` 是卡片标题下的一行，`page` 是展开后的表单本体：
 
 ```
-ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
-  name: 'settings.plugin.item',
-  key: 'web-relay',
+ctx.slots.inject('plugins.item', () => ctx.slots.register({
+  name: 'plugins.item',
+  id: 'web-relay',
+  order: <序号>,
+  label: () => <卡片标题>,
   locale: NS,
   inject: () => card.inject(),
 }, WebRelayCard))
 ```
 
-槽位以命名空间为键，是这套 UI 给仓外插件的正式扩展点：插件在宿主注册自己的命名空间，在浏览器注册同名的卡片，中间的分类页只负责配对与堆叠，永远不知道这个命名空间是什么意思。
+`id` 与 `order` 决定卡片在插件列表里的身份与位置，`label` 与 `locale` 提供标题文案，`inject` 返回卡片需要的服务面。槽位是这套 UI 给仓外插件的正式扩展点：插件在宿主注册自己的命名空间，在浏览器注册自己的卡片，插件页只负责摆放卡片，永远不知道这个命名空间是什么意思。
 
 **读取。** 卡片用 `ctx.settingsScope.bind({ namespace: 'web-relay' })` 拿到自己的作用域，再用同一套服务拿到 `web-relay-record` 的只读作用域。宿主状态与用户输入因此走同一条通道，插件不需要自己的 Remote 命名空间——那会要求 typert 生成器参与构建，属于"为一个状态面板引入一整套代码生成"的成本。
 
 **表单。** 卡片自己暂存草稿，只在用户点保存时写一次。每次设置写入都是一次带修订号栅栏的持久文档变更，逐字段提交会把一次编辑变成用户没要求也无法预览的多次写入。口令字段没有可回填的值（凭据不回传），所以草稿初始为空，空草稿不写任何东西，控件显示"已设置 / 未设置"。
 
-**状态区。** 卡片用 `web-relay-record` 渲染：状态、权威、入口 URL、CA 下载地址与指纹、逐步引导结果、最近一次错误、最近一次转发前预检。状态区是只读的。
+**状态区。** 卡片用 `web-relay-record` 渲染：状态、权威、入口 URL、CA 下载地址与指纹、逐步引导结果、最近一次错误、最近一次转发前预检。记录的 `state` 取 `unconfigured`、`bootstrapping`、`ready`、`failed` 之一，`tunnelState` 取 `stopped`、`starting`、`running`、`backing-off` 之一；卡片的隧道状态直接读这一条记录，不走宿主 RPC。状态区是只读的。
 
 **按钮。**
 
@@ -97,7 +101,7 @@ DSH 的客户端在非 loopback 页面上把设置持久化降级为内存，`se
 
 平台模块表是封闭的，只有九项：`react`、`react/jsx-runtime`、`react-dom`、`react-dom/client`、`@deepseek-ai/cordis`、`@deepseek-ai/dsh-client-store`、`@deepseek-ai/dsh-client-ui-slots`、`@deepseek-ai/dsh-client-ui-primitives`、`@deepseek-ai/dsh-client-ui-dockkit`。卡片的运行期 import 只用得到其中四到五项，其余能力全部走服务：`ctx.slots`、`ctx.settingsScope`、`ctx.locale`。仓库内的 `CardForm` 与 `PluginCard` 不对外导出，所以卡片用 `@deepseek-ai/dsh-client-ui-primitives` 的既有控件自绘表单与状态区，文案走 `ctx.locale` 的字典。
 
-`dsh.client.inject` 列出必须先加载的客户端半边，这里至少是 `@deepseek-ai/dsh-client-ui-settings`（`ctx.settingsScope` 的声明方）与 `@deepseek-ai/dsh-client-ui-settings-plugins`（`settings.plugin.item` 的声明方）。槽位声明与加载顺序不一致时 `ctx.slots.inject` 会等待，所以列出顺序只影响首屏出现卡片的早晚。
+`dsh.client.inject` 列出必须先加载的客户端半边，这里至少是 `@deepseek-ai/dsh-client-ui-settings`（`ctx.settingsScope` 的声明方）与 `@deepseek-ai/dsh-client-ui-plugin-manager`（`plugins.item` 的声明方）。槽位声明与加载顺序不一致时 `ctx.slots.inject` 会等待，所以列出顺序只影响首屏出现卡片的早晚。
 
 ## 失败模式
 

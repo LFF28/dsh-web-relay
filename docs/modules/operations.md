@@ -7,13 +7,13 @@
 | 观测点 | 位置 | 内容 |
 | --- | --- | --- |
 | 设置卡片状态区 | 服务器本机浏览器 | 引导状态、权威、入口 URL、CA 指纹与下载地址、逐步引导结果、最近一次错误、最近一次转发前预检 |
-| 启动横幅 | 内网主机 `dsh web` 终端 | 入口 URL、CA 指纹、隧道状态、自检结果 |
+| 启动横幅 | 内网主机 `dsh web` 终端 stdout | 一行 `dsh-web-relay: https://…/relay/enter`；其余状态在 harness 日志与 `web-relay-record` 记录里 |
 | 隧道日志 | 内网主机 `dsh web` 终端 | `ssh` 进程每次退出的退出码与 stderr 摘要 |
-| 隧道状态 | `ctx.webRelay.status()` | `state` / `since` / `connectedCount` / `lastExit` / `lastPreflight` |
-| 引导步骤结果 | 记录的 `steps` | 每步 `ok` / `failed` / `skipped` 与一句话说明 |
-| 访问日志 | 中继 `/var/log/caddy/dsh-relay-access.log` | JSON 单行；`remote_ip`、状态码、耗时；查询串里的 `key`/`token` 已打码，Cookie 默认打码 |
-| 认证失败 | 同上 | 401 覆盖 Caddy 的 `basic_auth` 失败与 DSH 的 Cookie 失败；两者都是可疑信号 |
-| fail2ban | 中继 | 依据访问日志封 IP |
+| 隧道状态 | 记录 `web-relay-record` 的 `tunnelState`（卡片）与 `ctx.webRelay.status()`（宿主） | `stopped` / `starting` / `running` / `backing-off`；`status()` 另带 `since` / `connectedCount` / `lastExit` / `lastPreflight` |
+| 引导步骤结果 | 记录的 `steps` | 每步 `ok` / `failed` / `skipped` 与一句话说明；第 13 步的 detail 另带 `中继对外监听：…` |
+| 访问日志 | 中继 `/var/log/caddy/dsh-relay-access.log`（`0600`，`roll_size 20MiB`，`roll_keep 5`） | JSON 单行；`remote_ip`、状态码、耗时；查询串里的 `key`/`token` 已打码，Cookie 默认打码 |
+| 认证失败 | 同上 | 401 覆盖 Caddy 的 `basic_auth` 失败与 DSH 的 Cookie 失败；只有前者带 `Www-Authenticate`，DSH 的 401 是首访的正常现象 |
+| fail2ban | 中继 | 依据访问日志里带 `Www-Authenticate` 的 `basic_auth` 401 封 IP |
 | 隧道端点 | 中继 `ss -ltnp \| grep 18080` | 必须是 `127.0.0.1:18080` |
 
 内网主机日志的保留策略沿用 `dsh web` 自身的输出方式（终端 / 你已有的日志方案）；本插件不写日志文件，也不需要轮转配置。
@@ -25,7 +25,7 @@
 | 症状 | 最可能的原因 | 先看 |
 | --- | --- | --- |
 | 卡片显示某一步 `failed` | 引导停在那一步，后续步骤是 `skipped` | 卡片状态区的该步说明；它带着 `ssh` 原文 |
-| 手机打不开，Safari 报证书错误 | 客户端未信任中继 CA，或未在"证书信任设置"里开启完全信任 | 用 `/relay/ca.crt` 重新取根证书，与卡片显示的 SHA256 指纹核对 |
+| 手机打不开，Safari 报证书错误 | 客户端未信任中继 CA，或未在"证书信任设置"里开启完全信任 | 第一台设备从服务器本机复制根证书，或经不依赖 TLS 信任的渠道送到设备；之后可用 `curl -k -u me:<网关口令> https://<authority>/relay/ca.crt` 重新取，与卡片显示的 SHA256 指纹核对 |
 | 手机弹出重复的用户名/密码框 | 网关口令错，或换过口令后 Safari 缓存了旧的 | 卡片里改 `gateway.password` 并保存；在 Safari 里清除该站点数据 |
 | 页面加载出 403 | 权威没进 `trustedHosts`（`vps.host` + `gateway.port` 与 Caddy 站点地址不一致） | 内网启动日志的自检第 ① 项；它直接指出两个值的差异 |
 | 页面加载出 401 | 权威进了 `trustedHosts`，但 Cookie 不对（过期 / 换了权威 / 换了签名密钥） | 重新打开入口 URL `/relay/enter` |
@@ -39,7 +39,7 @@
 | 浏览器显示一片空白，状态码是 200 且响应体为空 | Host 与站点地址不匹配，请求没进权威站点。兜底站点生效后这里应该是 421 加一段文字；看到空白说明兜底站点没写进去 | 中继 `curl -H 'Host: <权威>' https://<权威>/`；比对 `vps.host` 与 `gateway.port` |
 | 页面加载出 421 | Host 与权威不匹配（兜底站点接住了） | 核对客户端地址栏里的 host:port 与卡片显示的权威是否逐字一致 |
 | 认证成功后 `set-cookie` 里没有 `Secure` | 上游片段里的 `header_down` 掉了，或被改写成了不起作用的站点级 `header` | 中继 `/etc/caddy/Caddyfile` 的 `(dsh-relay-upstream)` 段；见 [relay-host.md](relay-host.md) 第 3 节 |
-| 中继上出现了 `gateway.port` 之外的 HTTP 监听 | 别的服务后来被装上来了（多一条读到会话 Cookie 的路） | 中继 `ss -ltnp`；能用别的方式提供服务就撤掉这个端口，否则必须接受这条风险 |
+| 中继上出现了 `gateway.port` 之外的 HTTP 监听 | 发行版 Caddy 包自带的 `/etc/caddy/Caddyfile` 里的 `:80` 站点，或别的服务后来被装上来了（多一条读到会话 Cookie 的路） | 中继 `ss -ltnp` 与第 13 步记录的 `中继对外监听：…`；发行版自带的 `:80` 块由操作者从 `/etc/caddy/Caddyfile` 删除后 `caddy reload`，别的服务能用别的方式提供就撤掉端口，否则必须接受这条风险 |
 | 页面能开但对话不刷新 | 长连接被中间设备或 `stream_timeout` 切断 | 中继访问日志里该连接的耗时；`stream_timeout` 已设为 24h，运营商也会切断空闲连接，DSH 客户端会重连 |
 
 **一条通用原则**：403 与 401 的区分是最有用的信号。403 永远是权威问题，401 永远是凭据问题。这个区分来自 DSH 自身的设计，本插件只是把它在启动时主动暴露出来。
@@ -60,7 +60,7 @@
 
 ### 改部署参数（本机页面）
 
-在卡片里改字段、点保存。插件在 `onChange` 里规范化，并按 [configuration.md](../configuration.md) 的"改动的影响面"表决定要重做什么：地址变化重算权威并重新引导，口令变化重新哈希，隧道参数变化重连。**不需要编辑 YAML，也不需要重启 `dsh web`。**
+在卡片里改字段、点保存。插件在 `onChange` 里规范化，并按 [configuration.md](../configuration.md) 的"改动的影响面"表决定要重做什么：地址变化重算权威并重新引导，口令变化重新哈希，隧道参数变化重连。手工编辑 `$DSH_HOME/settings.yaml` 同样会触发这条链路（见 [settings.md](settings.md)），两条路都**不需要重启 `dsh web`**。
 
 ### 换网关口令
 
@@ -94,7 +94,7 @@ caddy reload --config /etc/caddy/Caddyfile
 
 ### 端口被残留会话占着
 
-主机侧异常中断（断电、休眠、切网）不会给中继发 FIN，中继上处理那次连接的 `sshd` 子进程会继续占着 `127.0.0.1:<relayPort>`，默认配置下最长约 2 小时 11 分。正常情况下转发前预检会自动清掉它，只有预检被跳过或被拒时才需要手工处理。
+主机侧异常中断（断电、休眠、切网）不会给中继发 FIN，中继上处理那次连接的 `sshd` 子进程会继续占着 `127.0.0.1:<relayPort>`。中继的 `sshd` 片段把 `ClientAliveInterval` 设为 15、`ClientAliveCountMax` 设为 3，因此这种会话最多残留约 45 秒。正常情况下转发前预检会先清掉它，只有预检被跳过或被拒时才需要手工处理。
 
 先看卡片状态区的 `lastPreflight`：
 
@@ -106,7 +106,7 @@ caddy reload --config /etc/caddy/Caddyfile
 
 ```sh
 # 中继主机
-ss -ltnp 'sport = :18080'        # 看持有者；不是 sshd 且属主非 relay 就别杀
+sudo ss -ltnp 'sport = :18080'   # 看持有者；不带 sudo 时 users:(...) 不出现，不是 sshd/sshd-session 且属主非 relay 就别杀
 sudo kill <pid>                  # 确认是本部署的残留后杀掉，端口立即释放
 ```
 
