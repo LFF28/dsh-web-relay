@@ -330,7 +330,7 @@ bantime  = 3600
 
 - 日志是 JSON 单行，`failregex` 按行匹配即可。`remote_ip` 在行里排在 `status` 之前，所以"取地址 + 判状态"可以写成一条正则，不需要 fail2ban 的 JSON 解析。实测这两个字段的顺序与上面一致，`Authorization` 头也已经被 Caddy 记成 `REDACTED`。
 - `port` 由引导按 `gateway.port` 替换；`logpath` 与 Caddyfile 的 `output file` 出自同一份模板，两者必须一致。
-- `bantime.increment` 值得开启：单用户场景下自己被封的概率很低，而攻击者会被指数推开。它是 `[DEFAULTS]` 段的设置，因此模板把它放在同一个文件里。
+- `bantime.increment` 值得开启：攻击者会被指数推开，它是 `[DEFAULTS]` 段的设置，因此模板把它放在同一个文件里。代价是操作者自己也可能触发它——实测中反复发出不带网关口令的请求（每次诊断都算一次 `basic_auth` 失败）把操作者自己的出口 IP 封掉了，症状是公网端口直接 `Connection refused`，而中继上 Caddy 仍在 `*:8443` 监听、隧道也活着。`sudo fail2ban-client status caddy-dsh-relay` 看 `Banned IP list`，`sudo fail2ban-client set caddy-dsh-relay unbanip <你的 IP>` 解封；不想让自己的地址参与计数就把它写进该 jail 的 `ignoreip`。
 - 规则只统计网关口令失败：Caddy 的 `basic_auth` 拒绝请求时返回 `401` 并带上 `Www-Authenticate` 响应头，`failregex` 因此要求同一行同时出现 `"status":401` 与 `Www-Authenticate`。DSH 在浏览器还没有 DSH 会话 Cookie 时也回 `401`，但那条日志行带非空的 `user_id` 且没有 `Www-Authenticate`——首访时这是正常现象，把它计入会在正常使用中把操作者自己封掉。实测：连续六次这种 DSH 401 没有让 jail 的失败计数变化，一次错误口令则让它加一。
 - Caddy 侧的 jail 由引导安装（第 9 步的一部分），因为它的 `logpath` 与 `port` 与 Caddyfile 出自同一份模板，手工同步容易错位。sshd 侧的 jail 不自动安装：它的 `ignoreip` 依赖用户才知道的内网出口地址，写错会连同隧道一起封掉，因此只作为模板提供。这两类文件的所有权约定（托管块、整文件标记）见 [deploy/README.md](../../deploy/README.md)。
 - fail2ban 的封禁动作默认走 iptables；中继上只有 `nft` 而没有 `iptables` 兼容层时，要在 `[DEFAULTS]` 里把 `banaction` 换成 `nftables-multiport`，否则 jail 会启动但一条规则都装不上。

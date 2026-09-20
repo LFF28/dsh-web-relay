@@ -35,6 +35,7 @@
 | 隧道日志出现 `Permission denied (publickey)` | 中继上的 `authorized_keys` 托管块被改过，或引导没跑到第 5 步 | 中继 `/etc/dsh-web-relay/authorized_keys` 与 `/var/log/auth.log` |
 | 隧道连不上，同时手动 `ssh` 也连不上中继 | 内网主机的公网出口 IP 已被 sshd 的来源惩罚（OpenSSH ≥ 9.8）或 fail2ban 的 sshd jail 封禁——反复的公钥失败会触发它 | 中继 `sshd -T \| grep -i persource` 确认惩罚是否启用；`fail2ban-client status sshd`。修好公钥后等封禁到期，或把出口 IP 加入 `PerSourcePenaltyExemptList` / `ignoreip` |
 | 隧道显示 running 但公网连不上 | 安全组没开 `gateway.port`，或 Caddy 没监听 | [relay-host.md](relay-host.md) 的验证清单 |
+| 公网端口直接 `Connection refused`，中继上 Caddy 仍在监听、隧道也活着 | 自己的出口 IP 被 Caddy 侧 jail 封了：10 分钟内 5 次网关口令失败（含每次不带口令的诊断请求） | `sudo fail2ban-client status caddy-dsh-relay` 看 `Banned IP list`，`sudo fail2ban-client set caddy-dsh-relay unbanip <你的 IP>` 解封，见 [relay-host.md](relay-host.md) 第 8 节 |
 | 页面加载出 401，且响应里没有 `www-authenticate` | 网关 Cookie 没带上，或 Caddy 那一层没放行 | 中继访问日志里该请求的状态码 |
 | 浏览器显示一片空白，状态码是 200 且响应体为空 | Host 与站点地址不匹配，请求没进权威站点。兜底站点生效后这里应该是 421 加一段文字；看到空白说明兜底站点没写进去 | 中继 `curl -H 'Host: <权威>' https://<权威>/`；比对 `vps.host` 与 `gateway.port` |
 | 页面加载出 421 | Host 与权威不匹配（兜底站点接住了） | 核对客户端地址栏里的 host:port 与卡片显示的权威是否逐字一致 |
