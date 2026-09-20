@@ -1,0 +1,17 @@
+# dsh-web-relay — 本插件贡献的配置层。
+
+# 第一段覆盖 `connection` 行：把插件的权威并进 Host/Origin 围栏的受信列表，并让
+# 那一行等 `webRelay` 服务。patch 替换整行 `config`；这一行在 web-app 里只写了
+# `trustedHosts`，其余键都由 schema 默认值补齐，所以替换是完备的。
+#
+# 表达式必须写成**普通标量**：`!!js` 注册的节点种类是 scalar，写成 `!!js [...]`
+# 会让 YAML 把值解析成流式序列，标签随即变成「未知标签」而拒绝加载。
+- id: connection
+  inject: [webRuntime, webRelay]
+  config:
+    trustedHosts: !!js ctx.webRuntime.trustedHosts.concat(ctx.webRelay.trustedHosts)
+
+# 第二段插入本插件自己的行。`insert` 没有 id，因此它被追加到组合列表末尾。
+- insert:
+    - id: web-relay
+      name: dsh-web-relay
