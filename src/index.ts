@@ -16,7 +16,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { Config as RelayConfigSchema, resolveRelayConfig, type RelayConfig } from './config.js'
 import { registerRelaySettings } from './settings.js'
-import { mountEntryRoutes, RelayRuntime, WEB_RELAY_SERVICE } from './service.js'
+import { mountEntryRoute, RelayRuntime, WEB_RELAY_SERVICE } from './service.js'
 
 /** 稳定的 Cordis 插件名。 */
 export const name = 'web-relay'
@@ -55,7 +55,7 @@ export async function apply(ctx: Context, config?: RelayConfig): Promise<void> {
 
   if (resolved.entryEnabled) {
     ctx.effect(
-      () => mountEntryRoutes(deps, () => runtime.handle.authority()),
+      () => mountEntryRoute(deps, () => runtime.handle.authority()),
       'dsh-web-relay: 公网入口路由',
     )
   }

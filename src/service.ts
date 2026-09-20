@@ -15,7 +15,7 @@ import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 import { Bootstrap, StepLog } from './bootstrap.js'
 import type { ResolvedRelayConfig } from './config.js'
 import { diff, isRunnable, needsBootstrap, needsTunnelRestart, type Deployment } from './deployment.js'
-import { ENTER_PATH, registerEntryRoutes } from './entry.js'
+import { ENTER_PATH, registerEntryRoute } from './entry.js'
 import { caCert, knownHosts, relayPrivateKey, relayPublicKey, relayRoot, sshDir } from './paths.js'
 import { Preflight, type PreflightOutcome } from './preflight.js'
 import { adminTarget, commandArgv, firstLine, privilegedCommand, runSsh } from './ssh.js'
@@ -311,7 +311,6 @@ export class RelayRuntime {
     log.add('13', publicOk ? 'ok' : 'failed', `${publicCheck}；中继对外监听：${exposed}`)
 
     const caFingerprint = outcome.caFingerprint
-    const caUrl = `https://${authority}${'/relay/ca.crt'}`
     this.#state = selfCheck.ok && healthy && publicOk ? 'ready' : 'failed'
     this.#lastError = this.#state === 'ready' ? '' : selfCheck.ok ? (healthy ? publicCheck : '隧道未连接') : selfCheck.detail
     await this.#settings.patchRecord({
@@ -319,7 +318,6 @@ export class RelayRuntime {
       publicAuthority: authority,
       observedHostKeyFingerprint: outcome.hostKeyFingerprint,
       caFingerprint,
-      caUrl,
       gateway: { sessionSecret: this.#sessionSecret },
       steps: [...log.steps],
       lastError: this.#lastError,
@@ -477,13 +475,12 @@ function lastStepId(log: StepLog): string {
  * @param authority - 读当前权威。
  * @returns 释放两条路由的函数。
  */
-export function mountEntryRoutes(deps: RelayRuntimeDeps, authority: () => string): () => void {
-  return registerEntryRoutes({
+export function mountEntryRoute(deps: RelayRuntimeDeps, authority: () => string): () => void {
+  return registerEntryRoute({
     ctx: deps.ctx,
     webServer: deps.webServer,
     logger: deps.logger,
     logLabel: deps.config.logLabel,
-    caCertPath: caCert(),
     authority,
   })
 }

@@ -68,7 +68,7 @@ export function caDir(): string {
 }
 
 /**
- * 中继 CA 根证书副本（`0644`），`/relay/ca.crt` 就是把它交出去。
+ * 中继 CA 根证书在本机的副本（`0644`），由引导第 10 步从服务器取回。
  * @returns 根证书绝对路径。
  */
 export function caCert(): string {

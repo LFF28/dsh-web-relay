@@ -214,7 +214,6 @@ function Status(props: { t: (key: RelayLocaleKey) => string; state: RelayCardSta
   }
   if (record.caFingerprint !== undefined && record.caFingerprint !== '') {
     rows.push([t('caFingerprint'), record.caFingerprint])
-    rows.push([t('caUrl'), `https://${state.authority}/relay/ca.crt`])
   }
   if (record.observedHostKeyFingerprint !== undefined && record.observedHostKeyFingerprint !== '') {
     rows.push([t('hostKeyObserved'), record.observedHostKeyFingerprint])

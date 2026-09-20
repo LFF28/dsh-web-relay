@@ -181,8 +181,6 @@ export interface RecordConfig {
   observedHostKeyFingerprint?: string
   /** 中继 CA 根证书的 `SHA256:…` 指纹。 */
   caFingerprint?: string
-  /** 根证书下载地址。 */
-  caUrl?: string
   /** 网关。 */
   gateway?: {
     /** 网关会话 Cookie 的比对值；`gateway.password` 每次变化时重新生成。 */
@@ -222,7 +220,6 @@ export const Record: z<RecordConfig> = z.object({
   publicAuthority: z.string().default(''),
   observedHostKeyFingerprint: z.string().default(''),
   caFingerprint: z.string().default(''),
-  caUrl: z.string().default(''),
   gateway: RecordGatewaySchema.default({}),
   steps: z.array(z.object({
     id: z.string().required(),

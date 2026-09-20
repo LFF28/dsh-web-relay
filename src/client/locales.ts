@@ -19,7 +19,7 @@ export type RelayLocaleKey =
   | 'save' | 'saving' | 'saveFailed' | 'saved' | 'discard' | 'reload'
   | 'statusSection' | 'stateUnconfigured' | 'stateBootstrapping' | 'stateReady' | 'stateFailed'
   | 'tunnelStopped' | 'tunnelStarting' | 'tunnelRunning' | 'tunnelBackingOff'
-  | 'authority' | 'entryUrl' | 'caUrl' | 'caFingerprint' | 'hostKeyObserved'
+  | 'authority' | 'entryUrl' | 'caFingerprint' | 'hostKeyObserved'
   | 'lastPreflight' | 'preflightFree' | 'preflightReleased' | 'preflightSkipped' | 'preflightRefused'
   | 'steps' | 'stepOk' | 'stepFailed' | 'stepSkipped' | 'lastError'
   | 'empty' | 'readOnly'
@@ -63,7 +63,6 @@ export const zh: Record<RelayLocaleKey, string> = {
   tunnelBackingOff: '重连等待中',
   authority: '权威',
   entryUrl: '入口',
-  caUrl: '根证书',
   caFingerprint: '根证书指纹',
   hostKeyObserved: '中继主机密钥',
   lastPreflight: '转发前预检',
@@ -119,7 +118,6 @@ export const en: Record<RelayLocaleKey, string> = {
   tunnelBackingOff: 'Waiting to retry',
   authority: 'Authority',
   entryUrl: 'Entry',
-  caUrl: 'Root certificate',
   caFingerprint: 'Root fingerprint',
   hostKeyObserved: 'Relay host key',
   lastPreflight: 'Pre-connect preflight',
