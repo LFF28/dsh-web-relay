@@ -1,9 +1,13 @@
 /**
- * 公网入口的唯一一条路由。
+ * 换票点：公网 HTTP 面上唯一一条属于插件的路由。
  *
  * `/relay/enter` 是"用网关口令换到 DSH 会话"的那一步。它的做法是让插件自己去
  * 完成一次本机的令牌交换，再把结果原样转给浏览器：插件因此永远不接触 DSH 的
  * Cookie 签名密钥，也不需要把启动令牌写到任何地方。
+ *
+ * 操作者不需要知道这条路径：中继把"没带 DSH 会话 Cookie 的文档导航"在内部改写到
+ * 它（`deploy/Caddyfile.snippet` 的 `@noDsh`），浏览器地址栏里始终只有裸权威；只有
+ * 带着一个已失效的 DSH Cookie 时，中继才会用一次可见的跳转把浏览器送到这里。
  *
  * 根证书不经过公网：引导第 10 步把中继上生成的根证书直接取回本机保存，交给设备
  * 时走的是不依赖 TLS 信任的渠道（本机直接拷、隔空投送、消息应用）。公网因此只有
@@ -18,7 +22,7 @@ import type {} from '@deepseek-ai/dsh-client-connection'
 import type { WebServer } from '@deepseek-ai/dsh-host-webserver'
 import type { RelayLogger } from './tunnel.js'
 
-/** 公网入口路径。 */
+/** 换票点路径：中继把没带 DSH 会话 Cookie 的文档导航内部改写到这里，它不进地址栏。 */
 export const ENTER_PATH = '/relay/enter'
 
 /** 入口的依赖。 */
@@ -33,6 +37,13 @@ export interface EntryDeps {
   readonly logLabel: string
   /** 公网权威；为空字符串表示尚未配置。 */
   authority(): string
+  /**
+   * `entry.enabled`。
+   *
+   * 路由始终注册，开关只决定它答什么：中继侧的改写与跳转都指向这条路径，路径不存在
+   * 时浏览器会在 401 与 302 之间来回，那比"入口关掉了"难查得多。
+   */
+  enabled(): boolean
 }
 
 /** 只用到 `connection` 服务的一个方法，避免把整个服务类拉进类型里。 */
@@ -81,6 +92,11 @@ async function handleEnter(
   if (req.method !== 'GET') {
     res.writeHead(405, { 'content-type': 'text/plain; charset=utf-8', allow: 'GET' })
     res.end('只接受 GET\n')
+    return
+  }
+  if (!deps.enabled()) {
+    res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+    res.end('dsh-web-relay: 入口已关闭（entry.enabled = false）\n')
     return
   }
   const authority = deps.authority()

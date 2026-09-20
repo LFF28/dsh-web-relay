@@ -43,7 +43,7 @@ export interface RelayConfig {
   }
   /** 公网入口。 */
   entry?: {
-    /** 关掉后不注册 `/relay/enter`，公网入口只剩依赖已有 Cookie 的路径。 */
+    /** 关掉后 `/relay/enter` 只回一段说明；中继侧的改写与跳转不变。 */
     enabled?: boolean
   }
   /** 启动自检。 */
@@ -269,7 +269,7 @@ export interface ResolvedRelayConfig {
   readonly commandTimeoutMs: number
   /** `ssh -o ConnectTimeout`。 */
   readonly connectTimeoutSec: number
-  /** 是否注册公网入口。 */
+  /** `/relay/enter` 是否答一套会话，还是只回"入口已关闭"。 */
   readonly entryEnabled: boolean
   /** 引导结束后是否真的去请求一次公网权威。 */
   readonly publicProbe: boolean

@@ -196,7 +196,7 @@ function Field(props: { label: string; hint?: string; children: React.ReactNode 
 }
 
 /**
- * 状态区：当前状态、入口、根证书指纹、转发前预检与引导步骤。
+ * 状态区：当前状态、访问地址、根证书指纹、转发前预检与引导步骤。
  * @param props - 翻译函数与业务面快照。
  * @returns 状态区。
  */
@@ -210,7 +210,7 @@ function Status(props: { t: (key: RelayLocaleKey) => string; state: RelayCardSta
   const rows: Array<[string, string]> = []
   if (state.authority !== '') {
     rows.push([t('authority'), state.authority])
-    rows.push([t('entryUrl'), `https://${state.authority}/relay/enter`])
+    rows.push([t('entryUrl'), `https://${state.authority}/`])
   }
   if (record.caFingerprint !== undefined && record.caFingerprint !== '') {
     rows.push([t('caFingerprint'), record.caFingerprint])

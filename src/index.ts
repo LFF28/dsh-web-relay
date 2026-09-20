@@ -53,12 +53,15 @@ export async function apply(ctx: Context, config?: RelayConfig): Promise<void> {
   // 先 provide：`connection` 行的表达式可能在下一瞬间就求值。
   ctx.provide(WEB_RELAY_SERVICE, runtime.handle)
 
-  if (resolved.entryEnabled) {
-    ctx.effect(
-      () => mountEntryRoute(deps, () => runtime.handle.authority()),
-      'dsh-web-relay: 公网入口路由',
-    )
-  }
+  // 入口始终注册：中继侧的改写与跳转都指向这条路径，只在 `entry.enabled` 为假时
+  // 让它回一段说明，而不是让那条路径消失。
+  ctx.effect(
+    () => mountEntryRoute(deps, {
+      authority: () => runtime.handle.authority(),
+      enabled: () => resolved.entryEnabled,
+    }),
+    'dsh-web-relay: 公网入口路由',
+  )
   ctx.effect(() => () => { void runtime.dispose() }, 'dsh-web-relay: 隧道生命周期')
 
   await runtime.start()

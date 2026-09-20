@@ -15,7 +15,7 @@ import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 import { Bootstrap, StepLog } from './bootstrap.js'
 import type { ResolvedRelayConfig } from './config.js'
 import { diff, isRunnable, needsBootstrap, needsTunnelRestart, type Deployment } from './deployment.js'
-import { ENTER_PATH, registerEntryRoute } from './entry.js'
+import { registerEntryRoute } from './entry.js'
 import { caCert, knownHosts, relayPrivateKey, relayPublicKey, relayRoot, sshDir } from './paths.js'
 import { Preflight, type PreflightOutcome } from './preflight.js'
 import { adminTarget, commandArgv, firstLine, privilegedCommand, runSsh } from './ssh.js'
@@ -303,7 +303,10 @@ export class RelayRuntime {
     let publicCheck = '未执行（selfCheck.publicProbe 关闭）'
     let publicOk = true
     if (this.deps.config.publicProbe) {
-      const probe = await this.#trust.publicProbe(authority, caCert(), this.deps.config.probeTimeoutMs)
+      const probe = await this.#trust.publicProbe(authority, caCert(), this.deps.config.probeTimeoutMs, {
+        sessionSecret: this.#sessionSecret,
+        entryEnabled: this.deps.config.entryEnabled,
+      })
       publicCheck = probe.detail
       publicOk = probe.ok
     }
@@ -375,15 +378,16 @@ export class RelayRuntime {
   /**
    * 引导结束时打印入口信息。
    *
-   * 入口那一行走 stdout 而不是日志：终端里跑 `dsh --profile relay` 的人需要的
+   * 这一行走 stdout 而不是日志：终端里跑 `dsh --profile relay` 的人需要的
    * 就是这一行可以复制到手机上的地址，与 `dsh web:` 那一行同一个理由、同一个位置。
-   * 详情留在 `ctx.logger` 上，记录留在设置里。
+   * 地址是裸权威——没带会话 Cookie 的文档导航由中继在内部改写成换票点，换票点这条
+   * 路径不进地址栏，也不进这一行。详情留在 `ctx.logger` 上，记录留在设置里。
    */
   #banner(deployment: Deployment, caFingerprint: string, caddyVersion: string): void {
     const authority = deployment.authority ?? ''
     const label = this.deps.config.logLabel
     const ok = this.#state === 'ready'
-    console.log(`${label}: https://${authority}${ENTER_PATH}`
+    console.log(`${label}: https://${authority}/`
       + `${ok ? '' : '（有步骤失败，详见卡片）'}`
       + `\n  根证书指纹 ${caFingerprint}`
       + `\n  中继主机密钥 ${deployment.hostKeyFingerprint ?? '（未固定，见卡片记录）'}`
@@ -472,15 +476,19 @@ function lastStepId(log: StepLog): string {
  * 单独导出而不是塞进构造函数，是为了让"注册是 effect"这一点留在调用处：
  * `apply` 里一次 `ctx.effect` 就同时管住注册与撤销。
  * @param deps - 运行期依赖。
- * @param authority - 读当前权威。
- * @returns 释放两条路由的函数。
+ * @param readers - 读当前权威与入口开关。
+ * @returns 释放路由的函数。
  */
-export function mountEntryRoute(deps: RelayRuntimeDeps, authority: () => string): () => void {
+export function mountEntryRoute(
+  deps: RelayRuntimeDeps,
+  readers: { authority: () => string; enabled: () => boolean },
+): () => void {
   return registerEntryRoute({
     ctx: deps.ctx,
     webServer: deps.webServer,
     logger: deps.logger,
     logLabel: deps.config.logLabel,
-    authority,
+    authority: readers.authority,
+    enabled: readers.enabled,
   })
 }

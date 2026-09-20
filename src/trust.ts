@@ -94,16 +94,31 @@ export class Trust {
   }
 
   /**
-   * 公网自检：走真实 HTTPS 打一次根路径。
+   * 公网自检：走真实 HTTPS，按浏览器的顺序走一遍首访。
    *
-   * 期望 401（未带网关口令）或 200（带了）。根证书已取到时校验对端身份；没取到
-   * 就退回不校验，并把这一点写进结论——那时的证据只说明"链路上有人应答"。
+   * 三跳：不带任何头打一次 `/`（期望 401 或 200，证明链路上有人应答）；带网关会话
+   * Cookie 与文档导航的 `Accept` 再打一次（期望 303 —— 中继把这次导航在内部改写成
+   * 了换票点，插件换了票并回跳 `/`）；最后带着换来的 DSH Cookie 打第三次（期望
+   * 200 —— 权威绑定的 Cookie 被接受）。
+   *
+   * 入口关掉时中间那一跳期望 403：改写照样发生，差别只在换票点答一段说明。拿到
+   * 303 说明开关没生效，那等于把关掉的入口又打开了一次。
+   *
+   * 会话密钥是这几跳里唯一的凭据：它绕开网关口令，因此探测本身不产生口令失败、
+   * 不喂 fail2ban，也不把口令发到公网。它是公网上唯一的密文凭据，所以只在根证书
+   * 已取回、对端身份可校验时才发出去。
    * @param authority - 公网权威。
    * @param caCertPath - 本机保存的根证书路径。
-   * @param timeoutMs - 超时。
+   * @param timeoutMs - 单次请求超时。
+   * @param inputs - 会话密钥与入口开关。
    * @returns 结论。
    */
-  async publicProbe(authority: string, caCertPath: string, timeoutMs: number): Promise<SelfCheck> {
+  async publicProbe(
+    authority: string,
+    caCertPath: string,
+    timeoutMs: number,
+    inputs: PublicProbeInputs,
+  ): Promise<SelfCheck> {
     let ca: Buffer | undefined
     try {
       ca = await readFile(caCertPath)
@@ -112,23 +127,83 @@ export class Trust {
       ca = undefined
     }
     const parsed = new URL(`https://${authority}/`)
-    const status = await httpsStatus({
+    const target = {
       host: parsed.hostname,
       port: Number(parsed.port === '' ? '443' : parsed.port),
-      path: '/',
-      headers: { host: authority },
       timeoutMs,
       ca,
-    })
-    if (status === undefined) {
-      return { ok: false, detail: `公网请求 ${authority} 没有得到 HTTP 响应` }
     }
     const trust = ca === undefined ? '未校验对端身份（本地没有根证书副本）' : '已用本地根证书校验对端身份'
-    if (status === 401 || status === 200) {
-      return { ok: true, detail: `公网入口返回 ${String(status)}（${trust}）` }
+    const bare = await httpsResponse({ ...target, path: '/', headers: { host: authority } })
+    if (bare.status === undefined) {
+      return { ok: false, detail: `公网请求 ${authority} 没有得到 HTTP 响应` }
     }
-    return { ok: false, detail: `公网入口返回 ${String(status)}（期望 401 或 200；${trust}）` }
+    if (bare.status !== 401 && bare.status !== 200) {
+      return { ok: false, detail: `公网入口返回 ${String(bare.status)}（期望 401 或 200；${trust}）` }
+    }
+    const head = `公网入口返回 ${String(bare.status)}（${trust}）`
+
+    if (ca === undefined) {
+      return { ok: true, detail: `${head}；未验证裸地址带路（不把会话密钥发到未校验身份的连接上）` }
+    }
+    const session = `relay_session=${inputs.sessionSecret}`
+    const entered = await httpsResponse({
+      ...target,
+      path: '/',
+      headers: { host: authority, cookie: session, accept: 'text/html' },
+    })
+    if (!inputs.entryEnabled) {
+      return entered.status === 403
+        ? { ok: true, detail: `${head}；入口已关闭，裸地址给出的是说明而不是界面` }
+        : {
+            ok: false,
+            detail: `${head}；入口已关闭，裸地址却${describeStatus(entered.status)}（期望 403）：开关没生效，重新引导一次`,
+          }
+    }
+    if (entered.status !== 303) {
+      return {
+        ok: false,
+        detail: `${head}；裸地址没有带路（${describeStatus(entered.status)}，期望 303）：中继上的 Caddyfile 还没有这条改写，重新引导一次`,
+      }
+    }
+    const mintedRaw = cookieOf(entered.setCookie, 'dsh-auth-')
+    if (mintedRaw === undefined) {
+      return {
+        ok: false,
+        detail: `${head}；换票的 303 里没有 DSH 会话 Cookie：中继上的 Caddyfile 是旧版，重新引导一次`,
+      }
+    }
+    if (!/;\s*Secure(?:;|$)/iu.test(mintedRaw)) {
+      return {
+        ok: false,
+        detail: `${head}；换来的 DSH 会话 Cookie 没有 Secure：中继没给上游的 Set-Cookie 补上这一位`,
+      }
+    }
+    const minted = mintedRaw.split(';', 1)[0] ?? ''
+    const opened = await httpsResponse({
+      ...target,
+      path: '/',
+      headers: { host: authority, cookie: `${session}; ${minted}`, accept: 'text/html' },
+    })
+    if (opened.status !== 200) {
+      return {
+        ok: false,
+        detail: `${head}；换来的会话 Cookie 被拒（GET / ${describeStatus(opened.status)}，期望 200）`,
+      }
+    }
+    return {
+      ok: true,
+      detail: `${head}；裸地址直接进入界面（换票 303、会话 Cookie 带 Secure、换来 200）`,
+    }
   }
+}
+
+/** {@link Trust.publicProbe} 的输入。 */
+export interface PublicProbeInputs {
+  /** 网关会话密钥；等价于一次口令通过，用于绕开口令提示走到上游。 */
+  readonly sessionSecret: string
+  /** `/relay/enter` 是否换票。为假时它回 403 说明，中继侧的改写与跳转不变。 */
+  readonly entryEnabled: boolean
 }
 
 /** 一次 HTTP 探测的规格。 */
@@ -179,12 +254,12 @@ async function httpStatus(spec: HttpProbeSpec): Promise<number> {
 }
 
 /**
- * 打一次 HTTPS，只取状态码。
+ * 打一次 HTTPS，取状态码与全部 `Set-Cookie`。
  * @param spec - 探测规格。
- * @returns 状态码；连不上、超时或证书校验失败时为 undefined。
+ * @returns 两项响应事实；连不上、超时或证书校验失败时状态码为 undefined。
  */
-async function httpsStatus(spec: HttpsProbeSpec): Promise<number | undefined> {
-  return await new Promise<number | undefined>((resolve) => {
+async function httpsResponse(spec: HttpsProbeSpec): Promise<HttpsResponse> {
+  return await new Promise<HttpsResponse>((resolve) => {
     const req = httpsRequest({
       host: spec.host,
       port: spec.port,
@@ -194,13 +269,46 @@ async function httpsStatus(spec: HttpsProbeSpec): Promise<number | undefined> {
       timeout: spec.timeoutMs,
       ...spec.ca === undefined ? {} : { ca: spec.ca },
     }, (res) => {
+      const setCookie = res.headers['set-cookie'] ?? []
       res.resume()
-      res.on('end', () => { resolve(res.statusCode ?? 0) })
+      res.on('end', () => {
+        resolve({
+          status: res.statusCode,
+          setCookie: Array.isArray(setCookie) ? setCookie : [setCookie],
+        })
+      })
     })
     req.on('timeout', () => { req.destroy() })
-    req.on('error', () => { resolve(undefined) })
+    req.on('error', () => { resolve({ status: undefined, setCookie: [] }) })
     req.end()
   })
+}
+
+/** 一次 HTTPS 探测拿到的响应事实。 */
+interface HttpsResponse {
+  /** 状态码；连不上、超时或证书校验失败时为 undefined。 */
+  readonly status: number | undefined
+  /** 全部 `Set-Cookie`。 */
+  readonly setCookie: readonly string[]
+}
+
+/**
+ * 从一组 `Set-Cookie` 里取名字带指定前缀的那一条原文（含属性）。
+ * @param setCookie - 响应里的 `Set-Cookie`。
+ * @param prefix - Cookie 名字前缀。
+ * @returns 那一条 `Set-Cookie`；没有匹配时为 undefined。
+ */
+function cookieOf(setCookie: readonly string[], prefix: string): string | undefined {
+  return setCookie.find(raw => raw.startsWith(prefix))
+}
+
+/**
+ * 把状态码压成一句可直接读的话。
+ * @param status - 状态码；undefined 表示没有响应。
+ * @returns 供 detail 使用的片段。
+ */
+function describeStatus(status: number | undefined): string {
+  return status === undefined ? '没有得到 HTTP 响应' : `返回 ${String(status)}`
 }
 
 /**

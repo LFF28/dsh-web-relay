@@ -24,11 +24,44 @@
 # 上游只有一个，两个分支共用这一份定义：会话 Cookie 分支与口令分支必须给出
 # 完全相同的响应，分开写时容易只改一处。
 (dsh-relay-upstream) {
+	# 浏览器第一次打开裸权威时还没有 DSH 会话 Cookie，上游必然回 401。把这种文档
+	# 导航**在内部**改写成换票点，地址栏里就始终只有裸权威：换票点回 303 与
+	# Set-Cookie，浏览器带着这份 Cookie 再取一次 `/` 就进了界面。
+	#
+	# 判据是 Accept：浏览器只在文档导航里发 text/html，`/api`、页面自己发起的资源
+	# 请求与 WebSocket 握手都不带，它们各自的 401 必须原样透传。改写不看路径——
+	# `/`、`/index.html` 与地址栏里手敲的任何路径都落在同一个换票点上。
+	# `not` 而不是在值上写 `!`：Caddyfile 文档里 `!` 的用法是写在字段名上（字段
+	# 不存在才匹配），值上的取反没有文档。
+	#
+	# 不需要 `route` 包一层：`rewrite` 在内置指令顺序表里排在 `reverse_proxy`
+	# 之前，实测 caddy adapt 产出的处理器顺序就是 rewrite、reverse_proxy。
+	@noDsh {
+		method GET
+		header Accept *text/html*
+		not header Cookie *dsh-auth-*
+	}
+	rewrite @noDsh /relay/enter
 	reverse_proxy 127.0.0.1:@@RELAY_PORT@@ {
 		# DSH 自己不给 Cookie 加 Secure，由中继补上。这一行必须留在 reverse_proxy
 		# 内：站点级 header 不延迟时不生效，延迟后又会改写下面那个 relay_session。
 		# 按整个值匹配再追加，与 Cookie 的属性写法无关。
 		header_down Set-Cookie "$" "; Secure"
+		# Cookie 在、但已经失效（换过权威或换过签名密钥）时改写不会发生，上游回的 401
+		# 落到这里：只有文档导航要送回去换票，`/api` 之类的 401 原样透传——那是客户端
+		# 自己要处理的信号，变成一次跳转就成了"接口返回一张 HTML 页面"。
+		#
+		# 文档导航的判据只能写在块内：`handle_response` 自己的匹配器是**响应**匹配器，
+		# 其中 `header` 看的是响应头，写在上面永远匹配不到请求的 `Accept`。
+		@unauth status 401
+		handle_response @unauth {
+			@doc {
+				method GET
+				header Accept *text/html*
+			}
+			redir @doc /relay/enter 302
+			copy_response
+		}
 		stream_timeout 24h
 		stream_close_delay 5m
 	}
@@ -41,10 +74,12 @@
 }
 
 @@AUTHORITY@@ {
-	# 入口是 `https://<权威>/relay/enter`，不是裸权威。裸权威上的 DSH 只认带 token
-	# 的查询串或已有的 DSH 会话 Cookie，第一次访问必然 401，页面上只有一行
-	# `unauthorized`。`handle_errors` 改写不了它：它只接处理器抛出的错误（502 那类），
-	# 上游透传的 4xx 不算。因此入口地址由卡片与引导横幅负责给出。
+	# 操作者唯一需要打开的地址就是裸权威本身。DSH 只认带 token 的查询串或已有的
+	# 会话 Cookie，所以第一次访问必然 401；上游片段里的 `@noDsh` 把这种文档导航
+	# 在内部改写成 `/relay/enter`（这个路径字面量必须等于插件里的 `ENTER_PATH`，
+	# `tests/caddyfile.test.js` 盯着这一条），地址栏里因此不会出现这条路径。
+	# 上游透传的 401 是响应而不是 Caddy 自己产生的错误，`handle_errors` 接不到它，
+	# 只有上游片段里的 `rewrite` 与 `handle_response` 能碰到。
 	tls {
 		issuer internal {
 			ca dsh-relay

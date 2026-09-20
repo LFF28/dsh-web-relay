@@ -34,7 +34,7 @@ export const STEP_TITLES: ReadonlyArray<readonly [string, string]> = [
   ['10', '取回 CA 根证书'],
   ['11', '注册权威并自检'],
   ['12', '拉起隧道'],
-  ['13', '公网自检并输出入口 URL'],
+  ['13', '公网自检并输出访问地址'],
 ]
 
 /** 记录本次引导每一步的结果。 */
@@ -142,6 +142,45 @@ export interface BootstrapDeps {
   readonly graceMs: number
   /** 网关会话 Cookie 的比对值，写进 Caddyfile。取值器：口令变化时会换一份。 */
   readonly sessionSecret: () => string
+}
+
+/**
+ * 填 `deploy/Caddyfile.snippet` 需要的全部值。
+ *
+ * 入口开关不在其中：改写与跳转都由中继无条件执行，`entry.enabled` 只决定
+ * `/relay/enter` 答什么（见 `entry.ts`）。路径不存在时浏览器会在 401 与 302 之间
+ * 来回，那种失败比"入口关掉了"难查得多。
+ */
+export interface CaddyfileInputs {
+  /** 公网权威。 */
+  readonly authority: string
+  /** 权威里不带端口的主机名，给 `default_sni` 用。 */
+  readonly hostname: string
+  /** 公网入口 HTTPS 端口。 */
+  readonly gatewayPort: number
+  /** 中继上的反向转发端点端口。 */
+  readonly relayPort: number
+  /** 网关会话 Cookie 的比对值。 */
+  readonly sessionSecret: string
+  /** 网关口令的 bcrypt 哈希。 */
+  readonly passwordHash: string
+}
+
+/**
+ * 填 `deploy/Caddyfile.snippet` 的占位符。
+ * @param template - 模板原文。
+ * @param inputs - 值。
+ * @returns Caddyfile 正文。
+ */
+export function renderCaddyfile(template: string, inputs: CaddyfileInputs): string {
+  return substitute(template, {
+    AUTHORITY: inputs.authority,
+    HOST: inputs.hostname,
+    GATEWAY_PORT: String(inputs.gatewayPort),
+    SESSION_SECRET: inputs.sessionSecret,
+    BCRYPT_HASH: inputs.passwordHash,
+    RELAY_PORT: String(inputs.relayPort),
+  })
 }
 
 /** 一步失败时抛出，携带给用户看的原文。 */
@@ -463,13 +502,13 @@ export class Bootstrap {
       throw new StepFailure(detail)
     }
     const template = await readTemplate('Caddyfile.snippet')
-    const content = substitute(template, {
-      AUTHORITY: authority,
-      HOST: deployment.hostname ?? deployment.host,
-      GATEWAY_PORT: String(deployment.gatewayPort),
-      SESSION_SECRET: this.deps.sessionSecret(),
-      BCRYPT_HASH: hash,
-      RELAY_PORT: String(this.deps.relayPort),
+    const content = renderCaddyfile(template, {
+      authority,
+      hostname: deployment.hostname ?? deployment.host,
+      gatewayPort: deployment.gatewayPort,
+      relayPort: this.deps.relayPort,
+      sessionSecret: this.deps.sessionSecret(),
+      passwordHash: hash,
     })
     const script = [
       managedBlockScript({
