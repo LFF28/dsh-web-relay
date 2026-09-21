@@ -14,7 +14,7 @@ import type { WebServer } from '@deepseek-ai/dsh-host-webserver'
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 import { Bootstrap, StepLog } from './bootstrap.js'
 import type { ResolvedRelayConfig } from './config.js'
-import { diff, isRunnable, needsBootstrap, needsTunnelRestart, type Deployment } from './deployment.js'
+import { isRunnable, type Deployment } from './deployment.js'
 import { registerEntryRoute } from './entry.js'
 import { caCert, knownHosts, relayPrivateKey, relayPublicKey, relayRoot, sshDir } from './paths.js'
 import { Preflight, type PreflightOutcome } from './preflight.js'
@@ -83,9 +83,9 @@ export interface RelayRuntimeDeps {
 /**
  * 插件的中枢。
  *
- * 它把三件互相独立的事接在一起：设置变化决定"该重做什么"，引导与隧道执行动作，
- * 记录把结果交回卡片。对账入口只有 {@link RelayRuntime.reconcile} 一个，因此
- * "启动时"与"用户改设置时"走的是同一条判断路径。
+ * 它把三件互相独立的事接在一起：一次设置写入请求一次部署，引导与隧道执行动作，
+ * 记录把结果交回设置页。两条入口互不重叠——{@link RelayRuntime.start} 只恢复
+ * 已经就绪的服务，只有设置提交才会重新配置中继。
  */
 export class RelayRuntime {
   /** 交给 `ctx.provide` 的服务面。 */
@@ -95,18 +95,12 @@ export class RelayRuntime {
   readonly #preflight: Preflight
   readonly #trust: Trust
   readonly #bootstrap: Bootstrap
-  /** 上一次对账用的部署快照。 */
-  #previous: Deployment | undefined
-  /** 当前权威。 */
-  #authority = ''
   /** 当前状态。 */
   #state: RelayState = 'unconfigured'
   /** 最近一次失败。 */
   #lastError = ''
   /** 最近一次预检。 */
   #lastPreflight: PreflightOutcome | undefined
-  /** 正在跑的那一次引导；用它可以避免连点两次"重新引导"变成两次并发引导。 */
-  #running: Promise<void> | undefined
   /** 网关会话密钥。 */
   #sessionSecret = ''
 
@@ -165,57 +159,83 @@ export class RelayRuntime {
       // 取值器：口令变化时会话密钥会换掉，引导读到的必须是那一刻的那一份。
       sessionSecret: () => this.#sessionSecret,
     })
+    // 服务面的两个取值器都从设置里现取：`connection` 行的 `!!js` 表达式在重解析时
+    // 才求值，所以权威变化之后只要再触发一次重解析就够了，插件不持有第二份副本。
+    const settingsFacade = this.#settings
     this.handle = {
       get trustedHosts(): readonly string[] {
-        return thisAuthorityOf(settings) === '' ? [] : [thisAuthorityOf(settings)]
+        const authority = thisAuthorityOf(settingsFacade)
+        return authority === '' ? [] : [authority]
       },
-      authority: () => this.#authority,
+      authority: () => thisAuthorityOf(settingsFacade),
       status: () => this.#status(),
     }
   }
 
   /**
-   * 首次对账：建目录、注册入口、读设置并决定要做什么。
+   * 启动：建目录、备好会话密钥、读一次记录恢复内存状态，然后只做恢复。
    *
-   * 必须在 `apply` 里同步完成目录准备与路由注册，因此这里只把耗时的对账留成
-   * 后台任务——`connection` 行不依赖对账结果，它只依赖服务面已经 provide。
+   * 必须在 `apply` 里同步完成目录准备与路由注册，因此这里只把耗时的恢复留成后台
+   * 任务——`connection` 行不依赖恢复结果，它只依赖服务面已经 provide。
    */
   async start(): Promise<void> {
     await mkdir(sshDir(), { recursive: true, mode: 0o700 })
     this.#sessionSecret = await this.#ensureSessionSecret()
     const raw = this.#settings.record()
-    this.#state = raw.state === 'ready' ? 'ready' : 'unconfigured'
+    this.#state = raw.state ?? 'unconfigured'
     this.#lastError = raw.lastError ?? ''
     this.#lastPreflight = raw.lastPreflight
-    this.#settings.watch((next) => this.#onSettingsChange(next))
-    void this.reconcile()
+    this.#settings.watch(() => this.#deploy())
+    void this.#restore()
   }
 
   /**
-   * 对账：按当前部署参数与记录决定要不要引导、要不要拉隧道。
+   * 恢复：读一次设置与记录，把权威注册进围栏，并在记录说"中继上已经配好"时把
+   * 隧道重新拉起来。
    *
-   * 启动时与设置变化时都走这里。两条路径共用一份判断，是因为"重启 DSH"与"改了
-   * 地址再保存"在用户眼里是同一件事：让服务变成该有的样子。
-   * @returns 落定于本次对账结束。
+   * 它不引导。隧道是一条活的连接，不随进程重启存活，而中继上的东西还在，所以
+   * "重启 DSH"与"重新配置中继"是两件事：前者只把服务带回记录描述的样子。
+   * @returns 落定于恢复动作结束。
    */
-  async reconcile(): Promise<void> {
-    const next = this.#settings.deployment()
-    const previous = this.#previous
-    this.#previous = next
-    const change = diff(previous, next)
-    this.#authority = next.authority ?? ''
-
-    if (change.authority) {
-      this.#trust.apply()
-      if (this.#authority !== '') {
-        const check = await this.#trust.selfCheck(
-          this.#authority, this.deps.webServer.port, this.deps.config.probeTimeoutMs,
-        )
-        this.deps.logger[check.ok ? 'info' : 'warn']('%s %s', this.deps.config.logLabel, check.detail)
-      }
+  async #restore(): Promise<void> {
+    const deployment = this.#settings.deployment()
+    this.#trust.apply()
+    if (deployment.authority !== undefined) {
+      const check = await this.#trust.selfCheck(
+        deployment.authority, this.deps.webServer.port, this.deps.config.probeTimeoutMs,
+      )
+      this.deps.logger[check.ok ? 'info' : 'warn']('%s %s', this.deps.config.logLabel, check.detail)
     }
 
-    if (!isRunnable(next)) {
+    if (!isRunnable(deployment)) {
+      await this.#tunnel.stop()
+      this.#state = 'unconfigured'
+      const record = this.#settings.record()
+      if (record.state !== 'unconfigured' || record.publicAuthority !== '') {
+        await this.#settings.patchRecord({
+          state: 'unconfigured', publicAuthority: '', updatedAt: new Date().toISOString(),
+        })
+      }
+      return
+    }
+
+    const record = this.#settings.record()
+    if (record.state !== 'ready' || record.publicAuthority !== deployment.authority) return
+    if (deployment.autoStart) await this.#tunnel.start(deployment)
+    else await this.#tunnel.stop()
+  }
+
+  /**
+   * 一次部署：按当前设置跑完整引导。
+   *
+   * 只有两条路会走到这里——用户在设置页点了部署，或者设置文档被改成了另一个值
+   * （手工编辑 `settings.yaml` 与点部署等效）。设置服务的观察者按提交顺序串行调用
+   * 并等待返回值，所以两次部署天然不会并发。
+   * @returns 落定于本次引导结束。
+   */
+  async #deploy(): Promise<void> {
+    const deployment = this.#settings.deployment()
+    if (!isRunnable(deployment)) {
       await this.#tunnel.stop()
       this.#state = 'unconfigured'
       await this.#settings.patchRecord({
@@ -223,44 +243,15 @@ export class RelayRuntime {
       })
       return
     }
-
-    const record = this.#settings.record()
-    const ready = record.state === 'ready' && record.publicAuthority === this.#authority
-    if (needsBootstrap(change) || !ready) {
-      await this.runBootstrap(next, change.password)
-      return
-    }
-
-    // 记录说「中继上已经配好了」，但隧道是一条活的连接，不随 DSH 重启存活：
-    // 首次对账（`previous === undefined`）因此也要把隧道重新拉起来，否则重启
-    // 一台本来就就绪的主机只会在记录里显示 running，而实际什么都连不上。
-    if (change.autoStart || previous === undefined || needsTunnelRestart(change)) {
-      if (next.autoStart) await this.#tunnel.start(next)
-      else await this.#tunnel.stop()
-    }
+    await this.#doBootstrap(deployment)
   }
 
-  /**
-   * 跑完整引导（第 0–13 步）并更新记录。
-   *
-   * 并发调用会挂在同一次运行上：连点两次"重新引导"不该变成两次并发引导。
-   * @param deployment - 部署参数。
-   * @param passwordChanged - 口令是否刚刚变过；变过就换一份会话密钥。
-   * @returns 落定于本次引导结束。
-   */
-  async runBootstrap(deployment: Deployment, passwordChanged: boolean): Promise<void> {
-    if (this.#running !== undefined) return await this.#running
-    this.#running = this.#doBootstrap(deployment, passwordChanged)
-      .finally(() => { this.#running = undefined })
-    return await this.#running
-  }
-
-  /** {@link RelayRuntime.runBootstrap} 的实现。 */
-  async #doBootstrap(deployment: Deployment, passwordChanged: boolean): Promise<void> {
+  /** {@link RelayRuntime.#deploy} 的实现；完整引导的第 0–13 步。 */
+  async #doBootstrap(deployment: Deployment): Promise<void> {
     const label = this.deps.config.logLabel
-    if (passwordChanged || this.#sessionSecret === '') {
-      this.#sessionSecret = await this.#ensureSessionSecret(true)
-    }
+    // 口令必填且浏览器拿不回它，所以每次部署都要重填一次；每一次部署都按"口令变了"
+    // 处理：bcrypt 哈希与会话密钥一起换新，旧的网关会话一律失效。
+    this.#sessionSecret = await this.#ensureSessionSecret(true)
     this.#state = 'bootstrapping'
     this.#lastError = ''
     const log = new StepLog()
@@ -388,20 +379,14 @@ export class RelayRuntime {
     const label = this.deps.config.logLabel
     const ok = this.#state === 'ready'
     console.log(`${label}: https://${authority}/`
-      + `${ok ? '' : '（有步骤失败，详见卡片）'}`
+      + `${ok ? '' : '（有步骤失败，详见设置 ▸ 远程访问）'}`
       + `\n  根证书指纹 ${caFingerprint}`
-      + `\n  中继主机密钥 ${deployment.hostKeyFingerprint ?? '（未固定，见卡片记录）'}`
+      + `\n  中继主机密钥 ${deployment.hostKeyFingerprint ?? '（未固定，见设置页的状态区）'}`
       + `\n  Caddy ${caddyVersion === '' ? '沿用已有安装' : caddyVersion}`)
     this.deps.logger.info('%s 引导结束：%s', label, ok ? '就绪' : this.#lastError)
   }
 
-  /** 设置变化时重新对账。 */
-  async #onSettingsChange(next: Deployment): Promise<void> {
-    void next
-    await this.reconcile()
-  }
-
-  /** 隧道状态变化时写回记录，供卡片显示。 */
+  /** 隧道状态变化时写回记录，供设置页显示。 */
   #onTunnelState(state: TunnelState): void {
     void this.#settings.patchRecord({ tunnelState: state }).catch((error: unknown) => {
       this.deps.logger.warn('%s 写入隧道状态失败：%s', this.deps.config.logLabel, describeError(error))
@@ -426,7 +411,7 @@ export class RelayRuntime {
   #status(): RelayStatus {
     return {
       state: this.#state,
-      authority: this.#authority,
+      authority: thisAuthorityOf(this.#settings),
       tunnel: this.#tunnel.state(),
       ...this.#tunnel.uptimeMs() === undefined ? {} : { tunnelUptimeMs: this.#tunnel.uptimeMs() },
       ...this.#lastPreflight === undefined ? {} : { lastPreflight: this.#lastPreflight },

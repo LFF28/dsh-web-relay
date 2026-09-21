@@ -20,12 +20,6 @@ importers:
       '@deepseek-ai/dsh-client-locale':
         specifier: link:../../ai/deepseek-harness/packages/client/locale
         version: link:../../ai/deepseek-harness/packages/client/locale
-      '@deepseek-ai/dsh-client-store':
-        specifier: link:../../ai/deepseek-harness/packages/client/store
-        version: link:../../ai/deepseek-harness/packages/client/store
-      '@deepseek-ai/dsh-client-ui-plugin-manager':
-        specifier: link:../../ai/deepseek-harness/packages/client/ui-plugin-manager
-        version: link:../../ai/deepseek-harness/packages/client/ui-plugin-manager
       '@deepseek-ai/dsh-client-ui-primitives':
         specifier: link:../../ai/deepseek-harness/packages/client/ui-primitives
         version: link:../../ai/deepseek-harness/packages/client/ui-primitives
@@ -38,9 +32,6 @@ importers:
       '@deepseek-ai/dsh-client-ui-slots':
         specifier: link:../../ai/deepseek-harness/packages/client/ui-slots
         version: link:../../ai/deepseek-harness/packages/client/ui-slots
-      '@deepseek-ai/dsh-credentials':
-        specifier: link:../../ai/deepseek-harness/packages/credentials/credentials
-        version: link:../../ai/deepseek-harness/packages/credentials/credentials
       '@deepseek-ai/dsh-home-paths':
         specifier: link:../../ai/deepseek-harness/packages/util/home-paths
         version: link:../../ai/deepseek-harness/packages/util/home-paths

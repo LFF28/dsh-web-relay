@@ -1,5 +1,5 @@
 /**
- * 卡片的两份文案。
+ * 设置页的两份文案。
  *
  * 全部走字典：产品文案由 locale 拥有，写死在组件里会被 `verify-client-ui-i18n`
  * 拦下，而且中英切换时留一半硬编码比全硬编码更难发现。
@@ -9,14 +9,14 @@
 // 仅类型：声明本命名空间的文案键表，`ctx.locale.register` 与 `PropsLocale` 都按它推导。
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 
-/** 本卡片用到的文案键。 */
+/** 本页面用到的文案键。 */
 export type RelayLocaleKey =
-  | 'title' | 'description'
+  | 'nav' | 'title' | 'description'
   | 'vpsSection' | 'host' | 'hostHint' | 'sshPort' | 'user' | 'userHint'
   | 'identityFile' | 'identityFileHint' | 'hostKeyFingerprint' | 'hostKeyFingerprintHint'
   | 'gatewaySection' | 'gatewayPort' | 'gatewayPortHint' | 'password' | 'passwordHint'
   | 'tunnelSection' | 'autoStart' | 'autoStartHint'
-  | 'save' | 'saving' | 'saveFailed' | 'saved' | 'discard' | 'reload'
+  | 'deploy' | 'deploying' | 'deployFailed' | 'deployHint' | 'incomplete' | 'refused' | 'discard' | 'loading'
   | 'statusSection' | 'stateUnconfigured' | 'stateBootstrapping' | 'stateReady' | 'stateFailed'
   | 'tunnelStopped' | 'tunnelStarting' | 'tunnelRunning' | 'tunnelBackingOff'
   | 'authority' | 'entryUrl' | 'caFingerprint' | 'hostKeyObserved'
@@ -26,8 +26,9 @@ export type RelayLocaleKey =
 
 /** 简体中文文案。 */
 export const zh: Record<RelayLocaleKey, string> = {
+  nav: '远程访问',
   title: '远程访问（Web Relay）',
-  description: '把本机的 dsh web 经一台公网中继交给远程设备：中继只做转发，认证仍由 DSH 自己完成。',
+  description: '把本机的 dsh web 经一台公网中继交给远程设备：中继只做转发，认证仍由 DSH 自己完成。这张页面上的改动只留在浏览器里，点「部署」才会写进设置并在中继上完整重跑一遍引导。',
   vpsSection: '中继主机',
   host: '地址',
   hostHint: 'IP 或主机名；带端口时以你填的端口为准，否则用下面的网关端口。',
@@ -42,18 +43,20 @@ export const zh: Record<RelayLocaleKey, string> = {
   gatewayPort: '网关端口',
   gatewayPortHint: '中继上唯一的 HTTP 端口，安全组需要放行它。',
   password: '网关口令',
-  passwordHint: '留空表示不修改。口令只用于在中继上算出 bcrypt 哈希，明文不落中继磁盘。',
+  passwordHint: '必填，每次部署都要重填：口令不回传浏览器，页面从来没见过它。它只用于在中继上算出 bcrypt 哈希，明文不落中继磁盘。',
   tunnelSection: '隧道',
-  autoStart: '参数齐全时自动拉起隧道',
-  autoStartHint: '关掉后插件仍会完成引导，但不维护 ssh -R 连接，需要时再打开。',
-  save: '保存',
-  saving: '保存中…',
-  saveFailed: '保存失败',
-  saved: '已保存',
+  autoStart: '部署完成后维持隧道',
+  autoStartHint: '关掉后引导照样跑完，但不维护 ssh -R 连接，DSH 重启后也不会自动恢复。',
+  deploy: '部署',
+  deploying: '部署中…',
+  deployFailed: '部署失败',
+  deployHint: '部署会先写设置，然后在中继上完整重跑一遍引导；已经就绪的步骤只花几次 ssh 往返。中继侧被手工改过时，重新部署一次即可恢复。',
+  incomplete: '地址与网关口令都要填好才能部署。',
+  refused: '设置没有写入，中继上什么都没变。核对地址是裸的 host[:port]、网关口令非空，然后重试。',
   discard: '放弃修改',
-  reload: '重新引导',
+  loading: '读取设置…',
   statusSection: '当前状态',
-  stateUnconfigured: '等待配置',
+  stateUnconfigured: '等待部署',
   stateBootstrapping: '正在引导',
   stateReady: '就绪',
   stateFailed: '失败',
@@ -75,14 +78,15 @@ export const zh: Record<RelayLocaleKey, string> = {
   stepFailed: '失败',
   stepSkipped: '未执行',
   lastError: '最近一次失败',
-  empty: '还没有记录。填好上面的参数并保存，插件会在中继上完成引导。',
+  empty: '还没有记录。填好上面的参数后点「部署」，插件会在中继上完成引导。',
   readOnly: '当前页面不在服务器本机，设置只读。请在中继主机本机的浏览器里修改。',
 }
 
 /** English copy. */
 export const en: Record<RelayLocaleKey, string> = {
+  nav: 'Remote access',
   title: 'Remote access (Web Relay)',
-  description: 'Expose this machine\u2019s dsh web through a public relay. The relay only forwards; DSH still authenticates.',
+  description: 'Expose this machine\u2019s dsh web through a public relay. The relay only forwards; DSH still authenticates. Edits on this page stay in the browser until you press Deploy, which writes them into settings and re-runs the whole bootstrap on the relay.',
   vpsSection: 'Relay host',
   host: 'Address',
   hostHint: 'IP or hostname. A port written here wins over the gateway port below.',
@@ -97,18 +101,20 @@ export const en: Record<RelayLocaleKey, string> = {
   gatewayPort: 'Gateway port',
   gatewayPortHint: 'The relay\u2019s only HTTP port; the security group must allow it.',
   password: 'Gateway password',
-  passwordHint: 'Empty keeps the current one. It is only hashed on the relay; the plaintext never lands on the relay\u2019s disk.',
+  passwordHint: 'Required, and retyped on every deploy: the password never rides a response back to the browser, so this page has never seen it. It is only hashed on the relay; the plaintext never lands on the relay\u2019s disk.',
   tunnelSection: 'Tunnel',
-  autoStart: 'Start the tunnel automatically once the settings are complete',
-  autoStartHint: 'When off, bootstrap still runs but no ssh -R connection is kept.',
-  save: 'Save',
-  saving: 'Saving…',
-  saveFailed: 'Save failed',
-  saved: 'Saved',
+  autoStart: 'Keep the tunnel after a deploy',
+  autoStartHint: 'When off, bootstrap still runs but no ssh -R connection is kept, and a DSH restart does not bring one back.',
+  deploy: 'Deploy',
+  deploying: 'Deploying…',
+  deployFailed: 'Deploy failed',
+  deployHint: 'Deploy writes the settings, then re-runs the whole bootstrap on the relay; steps that are already in place only cost a few ssh round trips. Re-deploying is how you recover a relay someone changed by hand.',
+  incomplete: 'Fill in both the address and the gateway password before deploying.',
+  refused: 'The settings were not written, so the relay is unchanged. Check that the address is a bare host[:port] and the gateway password is not empty, then retry.',
   discard: 'Discard',
-  reload: 'Re-bootstrap',
+  loading: 'Loading settings…',
   statusSection: 'Status',
-  stateUnconfigured: 'Waiting for settings',
+  stateUnconfigured: 'Waiting for a deploy',
   stateBootstrapping: 'Bootstrapping',
   stateReady: 'Ready',
   stateFailed: 'Failed',
@@ -130,13 +136,13 @@ export const en: Record<RelayLocaleKey, string> = {
   stepFailed: 'failed',
   stepSkipped: 'skipped',
   lastError: 'Last failure',
-  empty: 'No record yet. Fill in the settings above and save; the plugin bootstraps the relay for you.',
+  empty: 'No record yet. Fill in the settings above and press Deploy; the plugin bootstraps the relay for you.',
   readOnly: 'This page is not on the relay host itself, so settings are read-only. Edit them from a browser on that host.',
 }
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
-    /** 远程访问卡片。 */
+    /** 远程访问设置页。 */
     'web-relay': RelayLocaleKey
   }
 }

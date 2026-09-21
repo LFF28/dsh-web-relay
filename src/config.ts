@@ -116,15 +116,21 @@ export interface DeploymentConfig {
   gateway?: {
     /** 公网入口 HTTPS 端口，也是中继上唯一的 HTTP 端口。 */
     port?: number
-    /** 网关口令。只交给中继上 `caddy hash-password` 的 stdin，明文不落中继的磁盘。 */
+    /** 网关口令。必填，每次部署都要重填——它的值不回传浏览器。只交给中继上 `caddy hash-password` 的 stdin，明文不落中继的磁盘。 */
     password?: string
   }
   /** 隧道。 */
   tunnel?: {
-    /** 参数齐全时是否自动拉起隧道。 */
+    /** 引导与部署完成后是否维持隧道。 */
     autoStart?: boolean
   }
-  /** 递增即触发一次完整重新引导；保存表单会自动递增。 */
+  /**
+   * 部署请求计数。用户在设置页点一次部署就加一。
+   *
+   * 它存在的唯一理由是设置服务对解析后的值做深层相等短路：写入与现值相同时既不
+   * 通知观察者也不推进修订号。没有它，"中继侧被手工改过、表单一个字没动、再点
+   * 一次部署"会静默什么都不做。
+   */
   bootstrapRequest?: number
 }
 
@@ -237,16 +243,24 @@ export const Record: z<RecordConfig> = z.object({
 /**
  * `web-relay` 命名空间的交叉字段约束。
  *
- * 只有一条，但它值一次拒绝：`vps.host` 形状非法时必须在保存时就失败，而不是
- * 存下一个会让围栏永远拒绝的值——后者的表现是「手机打开是 403」，而用户手上
- * 没有任何线索指向那个多余的路径或空白。
+ * 两条都在写入时拒绝，而不是存下一个会让围栏在运行期拒绝、或者让引导跑到一半才
+ * 发现缺东西的值：
+ *
+ * - `vps.host` 形状非法时的表现是「手机打开是 403」，而用户手上没有任何线索指向
+ *   那个多余的路径或空白。
+ * - 填了地址却没有口令时配不出网关，引导会以一份空哈希结束。
  * @param value - 待写入的整节。
- * @throws {Error} `vps.host` 非空且不是裸的规范权威时。
+ * @throws {Error} 地址非空且不是裸的规范权威，或地址非空而口令为空时。
  */
 export function validateDeployment(value: DeploymentConfig): void {
   const host = value.vps?.host ?? ''
-  if (host === '' || isBareAuthority(host)) return
-  throw new Error(`vps.host 必须是裸的 host[:port]（不能带 scheme、路径、用户名或首尾空白）：${JSON.stringify(host)}`)
+  if (host === '') return
+  if (!isBareAuthority(host)) {
+    throw new Error(`vps.host 必须是裸的 host[:port]（不能带 scheme、路径、用户名或首尾空白）：${JSON.stringify(host)}`)
+  }
+  if ((value.gateway?.password ?? '') === '') {
+    throw new Error('gateway.password 不能为空：网关口令不回传浏览器，每次部署都要重新填一次')
+  }
 }
 
 /** 每一档都填好值的 {@link RelayConfig}，下游不再需要判空。 */

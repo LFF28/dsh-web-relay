@@ -1,9 +1,9 @@
 /**
- * 卡片的业务面。
+ * 设置页的业务面。
  *
- * 卡片渲染需要的一切都来自设置：`web-relay` 是用户写的参数，`web-relay-record`
+ * 页面渲染需要的一切都来自设置：`web-relay` 是用户写的参数，`web-relay-record`
  * 是宿主写的记录。插件不给客户端开 RPC 通道——记录既然是宿主写下的最后事实，
- * 让卡片读它就不必再造一条只在浏览器打开时才有用的事件线。
+ * 让页面读它就不必再造一条只在浏览器打开时才有用的事件线。
  * @module dsh-web-relay/client/face
  */
 
@@ -27,7 +27,7 @@ export interface RelayPreflightView {
   readonly message?: string
 }
 
-/** 宿主写下的记录，按卡片需要的字段重新声明。 */
+/** 宿主写下的记录，按页面需要的字段重新声明。 */
 export interface RelayRecordView {
   /** 引导状态。 */
   readonly state?: string
@@ -61,13 +61,13 @@ export interface RelayDraft {
   readonly hostKeyFingerprint: string
   /** 网关端口。 */
   readonly gatewayPort: string
-  /** 网关口令；空串表示不修改。 */
+  /** 网关口令。必填：它是 `role('secret')` 字段，从来不回传浏览器，所以每次部署都要重填。 */
   readonly password: string
-  /** 是否自动拉起隧道。 */
+  /** 部署完成后是否维持隧道。 */
   readonly autoStart: boolean
 }
 
-/** 设置快照在卡片里用到的部分。 */
+/** 设置快照在页面里用到的部分。 */
 export interface RelayDeploymentView {
   /** `vps` 一节。 */
   readonly vps?: {
@@ -86,8 +86,7 @@ export interface RelayDeploymentView {
    * `gateway` 一节。
    *
    * 注意 `password` 不在这里：它是 `role('secret')` 字段，红线化时整字段被剥掉，
-   * 而不是打码。客户端的快照里因此从来没有它的任何痕迹，表单里那个输入框永远是
-   * 空的，留空在保存时表示"不修改"。
+   * 而不是打码。表单里那个输入框因此永远是空的，每次部署都要重新填一次。
    */
   readonly gateway?: {
     /** 网关端口。 */
@@ -95,16 +94,16 @@ export interface RelayDeploymentView {
   }
   /** `tunnel` 一节。 */
   readonly tunnel?: {
-    /** 是否自动拉起。 */
+    /** 部署完成后是否维持隧道。 */
     readonly autoStart?: boolean
   }
-  /** 单调递增的引导请求计数；每次加一就是一次"重新引导"。 */
+  /** 单调递增的部署请求计数；点一次部署加一。 */
   readonly bootstrapRequest?: number
 }
 
 /** 一次渲染用到的完整快照。 */
-export interface RelayCardState {
-  /** 设置读取的状态。 */
+export interface RelayView {
+  /** 设置读取的状态。`unavailable` 表示这个浏览器不被允许读宿主文档（非 loopback 页面）。 */
   readonly status: 'loading' | 'ready' | 'unavailable'
   /** 当前部署参数是否可写。 */
   readonly writable: boolean
@@ -122,25 +121,24 @@ export interface RelayCardState {
   readonly steps: readonly RelayStepView[]
 }
 
-/** 插件交给卡片的业务面。 */
-export interface RelayCardFace {
+/** 插件交给设置页的业务面。 */
+export interface RelayFace {
   /**
-   * 订阅卡片快照。
+   * 订阅页面快照。
    * @param select - 从完整快照里取这一帧要用的部分。
    * @returns 选中的值；快照变化时组件会重渲染。
    */
-  readonly useRelayCard: <T>(select: (state: RelayCardState) => T) => T
+  readonly useRelay: <T>(select: (state: RelayView) => T) => T
   /**
-   * 保存草稿。
-   * @param draft - 表单里的值。
-   * @returns 落定于写入完成；失败时抛出。
-   */
-  readonly save: (draft: RelayDraft) => Promise<void>
-  /**
-   * 请求重新引导。
+   * 部署：把表单写进设置，顺带把部署计数加一。
    *
-   * 只是把 `bootstrapRequest` 加一：真正决定要不要动手的是宿主，它按差异对账。
-   * @returns 落定于写入完成。
+   * 写入本身就是请求——宿主观察到这次提交就跑一遍完整引导，没有第二参数、没有
+   * 差异判断。计数保证"什么都没改也要重来一次"时这次写入仍然是一次真实变更。
+   *
+   * 设置写入被宿主拒绝时作用域会静默重读文档（错误在远端被收进结果信封，作用域
+   * 不把它抛出来），所以这里用"计数有没有落地"判断这次部署有没有生效。
+   * @param draft - 表单里的值。
+   * @returns 写入落地时为 true；被宿主拒绝（文档没变）时为 false。
    */
-  readonly requestBootstrap: () => Promise<void>
+  readonly deploy: (draft: RelayDraft) => Promise<boolean>
 }

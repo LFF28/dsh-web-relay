@@ -45,20 +45,14 @@ export class RelaySettings {
   }
 
   /**
-   * 原始部署参数，未规范化。表单回填与差异比较用它。
-   * @returns 用户层与默认值合并后的整节。
-   */
-  raw(): DeploymentConfig {
-    return this.deploymentScope.get()
-  }
-
-  /**
    * 订阅部署参数变化。
-   * @param listener - 收到规范化后的新旧两份快照。
+   *
+   * 回调不带参数：宿主不关心变了什么，一次提交就是一次部署请求。
+   * @param listener - 每次提交后调用。
    * @returns 取消订阅的函数。
    */
-  watch(listener: (next: Deployment, previous: Deployment) => void | Promise<void>): () => void {
-    return this.deploymentScope.watch((next, previous) => listener(normalize(next), normalize(previous)))
+  watch(listener: () => void | Promise<void>): () => void {
+    return this.deploymentScope.watch(() => listener())
   }
 
   /**

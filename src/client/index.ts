@@ -1,8 +1,9 @@
 /**
  * dsh-web-relay 的浏览器半边。
  *
- * 一个贡献：Plugins 页里的一张配置卡。它只在宿主确实在服务这两个命名空间时注册
- * ——没装这个插件的部署不应该在页面上留下它的痕迹。
+ * 一个贡献：设置菜单里的一个标签页。它只在宿主确实在服务这两个命名空间时注册
+ * ——没装这个插件的部署不应该在设置菜单里留下它的痕迹，非 loopback 页面也读不到
+ * 这两个命名空间，因此手机上不会出现这个标签。
  *
  * 运行时只 import 平台模块表里的包（`react`、`@deepseek-ai/dsh-client-ui-slots`、
  * `@deepseek-ai/dsh-client-ui-primitives`），其余全是 `import type`：客户端 bundle
@@ -13,17 +14,15 @@
 import { useSyncExternalStore } from 'react'
 // 仅类型：拉入 locale 插件的 Context 合并（ctx.locale）。
 import type {} from '@deepseek-ai/dsh-client-locale/client'
-// 仅类型：拉入 Plugins 页的 SlotMap 合并（`plugins.item`）。
-import type {} from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
-// 仅类型：拉入 SettingsScope 的 Context 合并（ctx.settingsScope）。
+// 仅类型：拉入 SettingsScope 的 Context 合并（ctx.settingsScope）与 settings.section 的槽位声明。
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 // 仅类型：拉入插槽注册表的 Context 合并（ctx.slots）。
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SettingsScope, SettingsScopeSnapshot } from '@deepseek-ai/dsh-client-ui-settings/client'
 import { DEPLOYMENT_NS, RECORD_NS } from '../namespaces.js'
-import { RelayCard } from './card.js'
-import type { RelayCardFace, RelayCardState, RelayDeploymentView, RelayDraft, RelayRecordView } from './face.js'
+import { RelaySection } from './section.js'
+import type { RelayDeploymentView, RelayDraft, RelayFace, RelayRecordView, RelayView } from './face.js'
 import { en, zh } from './locales.js'
 
 /** 文案命名空间。 */
@@ -32,8 +31,8 @@ export const NS = 'web-relay'
 /** 依赖的服务。 */
 export const inject = ['slots', 'locale', 'settingsScope']
 
-/** 卡片在 Plugins 页 Official 组里的位置；官方卡片用到 40，这里排在后面。 */
-const CARD_ORDER = 60
+/** 标签页在设置导航栏里的位置；排在内建的归档会话页之后。 */
+const SECTION_ORDER = 30
 
 /**
  * 装载客户端半边。
@@ -57,11 +56,11 @@ export function apply(ctx: Context): void {
     void describeFace.ensure()
     sync()
     return () => { unsubscribe(); off?.() }
-  }, 'dsh-web-relay: 配置卡片')
+  }, 'dsh-web-relay: 设置页')
 }
 
 /**
- * 注册卡片。
+ * 注册标签页。
  * @param ctx - 浏览器插件上下文。
  * @param deploymentScope - `web-relay` 命名空间的作用域。
  * @param recordScope - `web-relay-record` 命名空间的作用域。
@@ -72,21 +71,21 @@ function register(
   deploymentScope: SettingsScope<RelayDeploymentView>,
   recordScope: SettingsScope<RelayRecordView>,
 ): () => void {
-  return ctx.slots.inject('plugins.item', () => ctx.slots.register({
-    name: 'plugins.item',
+  return ctx.slots.inject('settings.section', () => ctx.slots.register({
+    name: 'settings.section',
     id: 'web-relay',
-    order: CARD_ORDER,
-    label: () => ctx.locale.bind(NS)('title'),
+    order: SECTION_ORDER,
+    label: () => ctx.locale.bind(NS)('nav'),
     locale: NS,
     inject: () => createFace(deploymentScope, recordScope),
-  }, RelayCard))
+  }, RelaySection))
 }
 
 /**
- * 组装卡片业务面。
+ * 组装页面业务面。
  *
- * `useRelayCard` 用 `useSyncExternalStore` 读两份作用域快照：两个命名空间各自变化
- * 都会让卡片重渲染，因为一次引导会同时写两边。
+ * `useRelay` 用 `useSyncExternalStore` 读两份作用域快照：两个命名空间各自变化
+ * 都会让页面重渲染，因为一次部署会同时写两边。
  * @param deploymentScope - `web-relay` 命名空间的作用域。
  * @param recordScope - `web-relay-record` 命名空间的作用域。
  * @returns 业务面。
@@ -94,11 +93,11 @@ function register(
 function createFace(
   deploymentScope: SettingsScope<RelayDeploymentView>,
   recordScope: SettingsScope<RelayRecordView>,
-): RelayCardFace {
+): RelayFace {
   // `useSyncExternalStore` 要求 `getSnapshot` 在两次读之间返回同一个引用，而
   // `project` 每次都造新对象。这里保留上一份投影，只有作用域真的变了才重算。
-  let snapshot: RelayCardState | undefined
-  const read = (): RelayCardState => {
+  let snapshot: RelayView | undefined
+  const read = (): RelayView => {
     snapshot ??= project(deploymentScope.getSnapshot(), recordScope.getSnapshot())
     return snapshot
   }
@@ -109,14 +108,12 @@ function createFace(
     return () => { offDeployment(); offRecord() }
   }
   return {
-    useRelayCard: <T>(select: (state: RelayCardState) => T): T => select(useSyncExternalStore(subscribe, read)),
-    save: async (draft: RelayDraft): Promise<void> => {
-      await deploymentScope.mutate(operations(draft))
-    },
-    requestBootstrap: async (): Promise<void> => {
+    useRelay: <T>(select: (view: RelayView) => T): T => select(useSyncExternalStore(subscribe, read)),
+    deploy: async (draft: RelayDraft): Promise<boolean> => {
       const current = deploymentScope.getSnapshot().value
       const request = typeof current?.bootstrapRequest === 'number' ? current.bootstrapRequest : 0
-      await deploymentScope.mutate([{ op: 'set', path: ['bootstrapRequest'], value: request + 1 }])
+      await deploymentScope.mutate(operations(draft, request + 1))
+      return deploymentScope.getSnapshot().value?.bootstrapRequest === request + 1
     },
   }
 }
@@ -126,24 +123,27 @@ function createFace(
  *
  * 逐字段写而不是整体覆盖：整体覆盖会连 `gateway.password` 一起抹掉——那个字段
  * 从来就没到过浏览器。一组操作共享同一次修订栅栏、同一次校验与同一次落盘，所以
- * `vps.host` 的跨字段约束仍然成立，也不会落下中途被拒的中间态。
+ * `vps.host` 的跨字段约束与"口令非空"的约束都成立，也不会落下中途被拒的中间态。
+ *
+ * `bootstrapRequest` 与表单值在这一次写入里一起提交：设置服务对解析后的值做深层
+ * 相等短路，只改计数也足以让这次提交成为一次真实变更，于是"什么都没改也要重来
+ * 一遍"与"改了字段"走的是同一条路。
  * @param draft - 表单里的值。
+ * @param bootstrapRequest - 本次部署的计数。
  * @returns 操作列表。
  */
-function operations(draft: RelayDraft): SettingsPathOperation[] {
-  const ops: SettingsPathOperation[] = [
+function operations(draft: RelayDraft, bootstrapRequest: number): SettingsPathOperation[] {
+  return [
     { op: 'set', path: ['vps', 'host'], value: draft.host.trim() },
     { op: 'set', path: ['vps', 'port'], value: port(draft.sshPort, 22) },
     { op: 'set', path: ['vps', 'user'], value: draft.user.trim() === '' ? 'root' : draft.user.trim() },
     { op: 'set', path: ['vps', 'identityFile'], value: draft.identityFile.trim() },
     { op: 'set', path: ['vps', 'hostKeyFingerprint'], value: draft.hostKeyFingerprint.trim() },
     { op: 'set', path: ['gateway', 'port'], value: port(draft.gatewayPort, 8443) },
+    { op: 'set', path: ['gateway', 'password'], value: draft.password },
     { op: 'set', path: ['tunnel', 'autoStart'], value: draft.autoStart },
+    { op: 'set', path: ['bootstrapRequest'], value: bootstrapRequest },
   ]
-  // 留空表示"不修改"：口令字段永远不会带着旧值回到浏览器，能被写成空串的只有
-  // 用户刚刚输入的内容。
-  if (draft.password !== '') ops.push({ op: 'set', path: ['gateway', 'password'], value: draft.password })
-  return ops
 }
 
 /** 一次路径写入。与线协议上的 `SettingsPathOpView` 同构，在这里就地声明以免
@@ -164,15 +164,15 @@ function port(text: string, fallback: number): number {
 }
 
 /**
- * 把两份作用域快照投影成卡片快照。
+ * 把两份作用域快照投影成页面快照。
  * @param deployment - `web-relay` 的快照。
  * @param record - `web-relay-record` 的快照。
- * @returns 卡片快照。
+ * @returns 页面快照。
  */
 function project(
   deployment: SettingsScopeSnapshot<RelayDeploymentView>,
   record: SettingsScopeSnapshot<RelayRecordView>,
-): RelayCardState {
+): RelayView {
   const value = deployment.value
   const written = record.value
   const state = written?.state

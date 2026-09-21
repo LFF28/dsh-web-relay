@@ -23,7 +23,6 @@ function deployment() {
     gatewayPort: 8443,
     password: 'p',
     autoStart: true,
-    bootstrapRequest: 0,
     authority: 'relay.example:8443',
     hostname: 'relay.example',
   }
