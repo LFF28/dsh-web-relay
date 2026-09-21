@@ -17,7 +17,7 @@ dsh-web-relay/
 │   ├── trust.ts          # 权威注册与启动自检，见 modules/trust.md
 │   ├── tunnel.ts         # SSH 反向隧道守护，见 modules/tunnel.md
 │   ├── entry.ts          # 换票点 /relay/enter，见 modules/entry.md
-│   └── client/           # 浏览器半边：一张设置卡片
+│   └── client/           # 浏览器半边：设置菜单里的「远程访问」页
 ├── deploy/               # 引导写入中继的配置模板
 └── docs/                 # 本目录
 ```
@@ -69,9 +69,9 @@ Cordis 模块名用短名 `web-relay`（`export const name = 'web-relay'`），p
 | 指出了产物 | `exports['./client']` 指向 `lib/client.js` | 直接抛错 `declares dsh.client but exports no "./client" bundle` |
 | 产物是闭包工厂 | 构建产物调用 `window.__ModuleLoader__.load({ id, factory })` | 加载器无法取得模块工厂 |
 
-`dsh.client.inject` 是**信息性**的包名列表，不参与 Cordis 注入；真正的服务依赖写在客户端模块自己导出的 `inject` 里。本插件两边都不需要 `external`：卡片只引用模块表基线里的模块。
+`dsh.client.inject` 是**信息性**的包名列表，不参与 Cordis 注入；真正的服务依赖写在客户端模块自己导出的 `inject` 里。本插件两边都不需要 `external`：设置页只引用模块表基线里的模块。
 
-卡片能用的模块是固定的九项：`react`、`react/jsx-runtime`、`react-dom`、`react-dom/client`、`@deepseek-ai/cordis`、`@deepseek-ai/dsh-client-store`、`@deepseek-ai/dsh-client-ui-slots`、`@deepseek-ai/dsh-client-ui-primitives`、`@deepseek-ai/dsh-client-ui-dockkit`。其余包只能做**类型**导入（类型导入会被构建擦除，不产生模块请求）：`@deepseek-ai/dsh-client-ui-settings-plugins` 只导出类型，不导出 `CardForm` / `PluginCard` 组件，所以卡片用 `ui-primitives` 自绘表单控件。详细形态见 [settings.md](settings.md)。
+设置页能用的模块是固定的九项：`react`、`react/jsx-runtime`、`react-dom`、`react-dom/client`、`@deepseek-ai/cordis`、`@deepseek-ai/dsh-client-store`、`@deepseek-ai/dsh-client-ui-slots`、`@deepseek-ai/dsh-client-ui-primitives`、`@deepseek-ai/dsh-client-ui-dockkit`。其余包只能做**类型**导入（类型导入会被构建擦除，不产生模块请求）：`@deepseek-ai/dsh-client-ui-settings-plugins` 只导出类型，不导出 `CardForm` / `PluginCard` 组件，所以设置页用 `ui-primitives` 自绘表单控件。详细形态见 [settings.md](settings.md)。
 
 ## patch 层
 
@@ -108,7 +108,7 @@ Cordis 模块名用短名 `web-relay`（`export const name = 'web-relay'`），p
 
 ### 权威的运行期更新
 
-`HostConnectionService` 把 `trustedHosts` 存成构造期快照，没有 setter，所以"改权威要重启 profile"是最省事的做法——但用户改了卡片里的地址却没有任何反应，是更差的体验。`trust` 模块因此让那一行重新解析自己的配置：
+`HostConnectionService` 把 `trustedHosts` 存成构造期快照，没有 setter，所以"改权威要重启 profile"是最省事的做法——但用户改了设置页里的地址却没有任何反应，是更差的体验。`trust` 模块因此让那一行重新解析自己的配置：
 
 ```ts
 const entry = ctx.loader.resolve('connection')      // Loader 继承 EntryTree
@@ -117,7 +117,7 @@ await entry.fiber?.update(entry.options.config, true)
 
 `entry.options.config` 是**未求值**的原始配置，仍然带着 `!!js` 表达式；`Fiber.update` 会用当前 `ctx` 重新求值它，`noSave = true` 让 loader 的写回监听器跳过，因此解析出的字面量不会覆盖配置文件里那行表达式。fiber 重启时 `/api` 路由先注销再注册。
 
-这个动作只在权威的规范化结果**真的变了**时执行，所以普通保存不会扰动正在使用的连接。
+这个动作不做差异判断：每一次部署都会重新解析一次那一行，表达式按当时的权威求值。
 
 ## 插件入口
 
@@ -145,22 +145,23 @@ export interface WebRelayHandle {
 }
 ```
 
-服务面刻意只有三项：`trustedHosts` 是配置表达式唯一需要的东西；`authority()` 是引导、自检与卡片共用的单一权威来源；`status()` 是给日志与诊断用的只读快照。按 DSH 的服务设计规则，服务面只为当前消费者存在，因此不暴露 `start()` / `stop()` / `restart()` 这类还没有消费者的方法。
+服务面刻意只有三项：`trustedHosts` 是配置表达式唯一需要的东西；`authority()` 是引导、自检与设置页共用的单一权威来源；`status()` 是给日志与诊断用的只读快照。按 DSH 的服务设计规则，服务面只为当前消费者存在，因此不暴露 `start()` / `stop()` / `restart()` 这类还没有消费者的方法。
 
 `trustedHosts` 每次读取返回新数组，配置表达式里的展开因此不会把服务内部状态泄漏出去。
 
 ## 加载与生效顺序
 
-`apply` 期间按顺序完成：
+`apply` 同步完成前面几步，后面的动作由设置提交与启动恢复触发：
 
 1. 读 `ctx.webServer.port` 与 `ctx.webServer.host`：前者是隧道目标端口，后者用于启动自检判断"是否只绑在 loopback"。
-2. 同步 `provide('webRelay', ...)`。此时 settings 尚未读取，`authority()` 返回 `undefined`，`trustedHosts` 为空数组。
-3. 注册 `/relay/enter` 一条精确路由（换票点；`entry.enabled` 为假时它回 `403` 说明，路由仍在）。
-4. 在 `ctx.inject(['settings'], ...)` 回调里注册两个命名空间并读取当前值。settings 在更早的基础层行里就绪，该回调同步执行，因此**已保存的权威在第 2 步之后的同一轮里就可用**。
-5. settings 变化时重新计算权威；结果变了就重解析 `connection` 行（见上）。
-6. 部署参数齐全且 `tunnel.autoStart` 为真时启动引导与隧道；`Deployment` 不齐全时什么都不做，记录里显示等待配置。
+2. 注册两个设置命名空间并拿到读写门面。settings 是行级注入的一部分，在更早的基础层行里就绪，这一步同步完成。
+3. 同步 `provide('webRelay', ...)`。服务面的两个取值器都从设置里现取，因此**已保存的权威在 `connection` 行第一次解析时就可用了**；未配置时 `authority()` 返回空字符串、`trustedHosts` 是空数组。
+4. 注册 `/relay/enter` 一条精确路由（换票点；`entry.enabled` 为假时它回 `403` 说明，路由仍在）。
+5. `start()`：备好会话密钥、读一次记录恢复内存状态、挂上设置观察者，然后异步做一次恢复。
+6. settings 每次提交都触发一次完整引导（第 0–13 步），其中包含重算权威与重解析 `connection` 行（见上）；宿主不做差异判断。
+7. 启动 profile 不引导：恢复只读一次设置与记录、把权威注册进围栏，并在记录为 `ready`、权威一致且 `tunnel.autoStart` 为真时重新拉起隧道；`Deployment` 不齐全时停隧道并把记录写成等待配置。
 
-第 2 步必须早于第 3 步，且不依赖第 5、6 步。整个 `apply` 不做任何自包含的失败校验：地址、口令、路径都来自 settings 且可能是空的，把校验放在这里只会让填错地址的 profile 起不来。可失败的动作全部落在引导步骤里，以文本呈现，见 [bootstrap.md](bootstrap.md)。
+第 3 步的 `provide` 必须早于 `connection` 行解析配置，且不依赖第 5、6、7 步。整个 `apply` 不做任何自包含的失败校验：地址、口令、路径都来自 settings 且可能是空的，把校验放在这里只会让填错地址的 profile 起不来。可失败的动作全部落在引导步骤里，以文本呈现，见 [bootstrap.md](bootstrap.md)。
 
 ## 安装、卸载与升级
 

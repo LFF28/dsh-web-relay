@@ -27,7 +27,7 @@
 
 ## `web-relay`（用户填的部署参数）
 
-用户在 设置 ▸ 插件 ▸ Web Relay 卡片里填，落盘在 `$DSH_HOME/settings.yaml`（`0600`）。
+用户在 **设置 ▸ 远程访问** 页里填，点「部署」才写下去，落盘在 `$DSH_HOME/settings.yaml`（`0600`）。
 
 | 字段 | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
@@ -37,9 +37,9 @@
 | `vps.identityFile` | `string?` | 空 | 管理账号私钥路径。留空则用系统身份解析（`~/.ssh/config`、默认私钥、`SSH_AUTH_SOCK`） |
 | `vps.hostKeyFingerprint` | `string?` | 空 | 期望的中继主机公钥指纹，`SHA256:…` 形式。留空时首次连接按 TOFU 记录并打印指纹 |
 | `gateway.port` | `number` | `8443` | 公网入口 HTTPS 端口，也是中继上唯一的 HTTP 端口。权威即 `<vps.host>:<gateway.port>` |
-| `gateway.password` | `secret?` | 空 | 网关口令，用户自选，手机每次进入时在浏览器口令框里输入。插件只把它交给 `caddy hash-password`，明文不落中继的磁盘 |
-| `tunnel.autoStart` | `boolean` | `true` | 参数齐全时是否自动拉起隧道 |
-| `bootstrapRequest` | `number` | `0` | 递增即触发一次完整重新引导；保存表单会自动递增 |
+| `gateway.password` | `secret?` | 空 | 网关口令，用户自选，手机每次进入时在浏览器口令框里输入。**每次部署都要重填**：它是 `secret` 字段，从不回传浏览器。填了地址却没有口令时写入被拒。插件只把它交给 `caddy hash-password`，明文不落中继的磁盘 |
+| `tunnel.autoStart` | `boolean` | `true` | 部署完成后是否维持隧道；关掉后引导照样跑完，但 DSH 重启也不会恢复连接 |
+| `bootstrapRequest` | `number` | `0` | 部署计数：点一次部署加一。它让"一个字都没改也要重来一遍"成为一次真实的文档变更；宿主不读它 |
 
 标记为 `secret` 的字段在发给浏览器时被替换成"已设置 / 未设置"，值本身不出宿主进程；`settings.yaml` 里仍是明文，文件权限是 `0600`，目录 `0700`。
 
@@ -56,31 +56,35 @@
 
 ## `web-relay-record`（插件写的运行记录）
 
-插件拥有这个命名空间，卡片只读回显。它是卡片唯一的宿主状态通道：卡片通过客户端 settings 作用域读它，不需要额外的 Remote 命名空间。
+插件拥有这个命名空间，设置页只读回显。它是这个页面唯一的宿主状态通道：页面通过客户端 settings 作用域读它，不需要额外的 Remote 命名空间。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `state` | `'unconfigured' \| 'bootstrapping' \| 'ready' \| 'failed'` | 引导状态 |
-| `tunnelState` | `'stopped' \| 'starting' \| 'running' \| 'backing-off'` | 隧道状态；卡片直接读这一条，不走宿主 RPC |
+| `tunnelState` | `'stopped' \| 'starting' \| 'running' \| 'backing-off'` | 隧道状态；页面直接读这一条，不走宿主 RPC |
 | `updatedAt` | `string` | 最近一次记录更新的 ISO 时间 |
 | `publicAuthority` | `string` | 已生效的权威，空字符串表示尚未生效 |
 | `observedHostKeyFingerprint` | `string` | 首次连接时实地观察到（或按固定值校验通过）的中继主机公钥指纹 |
 | `caFingerprint` | `string` | 中继 CA 根证书的 `SHA256:…` 指纹，供用户与 VPS 上 `data/pki/authorities/dsh-relay/root.crt` 核对 |
-| `gateway.sessionSecret` | `secret` | 网关会话 Cookie 的比对值；首次引导时用 `randomBytes(24)` 的 base64url 生成并存进记录命名空间，只有 `gateway.password` 变化时才重新生成 |
+| `gateway.sessionSecret` | `secret` | 网关会话 Cookie 的比对值；每次部署用 `randomBytes(24)` 的 base64url 重新生成并存进记录命名空间 |
 | `steps` | `{ id, title, status, detail }[]` | 最近一次引导的逐步结果，`status` 为 `ok`、`failed` 或 `skipped`；第 13 步的 `detail` 另带 `中继对外监听：…` |
 | `lastError` | `string` | 最近一次失败的原文摘要，成功时为空 |
 
 访问地址完全由 `publicAuthority` 决定：`https://<publicAuthority>/`。它不含任何秘密，因此可以放心收藏、同步与备份；承担身份的是网关口令与 DSH 的权威绑定 Cookie，首次访问时由中继在内部带路到换票点，见 [modules/entry.md](modules/entry.md)。
 
-## 改动的影响面
+## 一次部署做了什么
 
-| 改动的字段 | 插件动作 | 用户可见后果 |
+改动不在写入的那一刻生效——除**点部署**（或手工改这个设置文档）之外，插件不会重新配置中继。每次部署都是一遍完整的引导第 0–13 步，没有"只重做变了的那一半"这种逻辑；下面列出的是这些字段各自带来的后果。
+
+| 改动的字段 | 部署时的动作 | 用户可见后果 |
 | --- | --- | --- |
-| `vps.host`、`gateway.port` | 重算权威 → 重解析 `connection` 行 → 重新引导 → 重启隧道 | DSH 的 Cookie 全部失效（Cookie 与权威绑定），手机要用新地址重新进入一次 |
+| `vps.host`、`gateway.port` | 权威按新值重算 → 重解析 `connection` 行 → 引导 → 重启隧道 | 权威只保留新的那一个；DSH 的 Cookie 全部失效（Cookie 与权威绑定），手机要用新地址重新进入一次 |
 | `gateway.password` | 重新哈希并 reload Caddy，同时重置 `gateway.sessionSecret` | 所有设备的网关会话立刻失效，下次进入重新询问口令 |
-| `vps.user`、`vps.port`、`vps.identityFile` | 下一次引导与下一次转发前预检改用新凭据 | 引导步骤用新凭据重跑一遍，已就绪的步骤快速跳过；预检立即改用新凭据 |
+| `vps.user`、`vps.port`、`vps.identityFile` | 引导与转发前预检改用新凭据 | 引导步骤用新凭据重跑一遍，已就绪的步骤快速跳过 |
 | `vps.hostKeyFingerprint` | 与观察值比对 | 不匹配时引导停止在这一步，不会带着未验证的连接继续 |
-| `tunnel.autoStart` 置为 `false` | 停隧道且不再自动拉起 | 公网入口返回隧道不可达页面 |
-| `bootstrapRequest` 递增 | 完整重跑一遍引导 | 端口、证书、`authorized_keys` 都已就绪时很快结束 |
+| `tunnel.autoStart` 置为 `false` | 引导跑完后停掉隧道 | 公网入口返回隧道不可达页面；下次重启 DSH 也不会自动恢复 |
+| `bootstrapRequest` 递增 | 本身就是一次部署 | 端口、证书、`authorized_keys` 都已就绪时很快结束 |
+
+部署失败时配置文档留在失败的那一份，权威围栏也只含它，旧地址因此打不开——重新点一次部署即可重来，引导是幂等的。
 
 换掉 `vps.host` 之后，旧中继上的 `relay` 用户、`sshd` 片段和 Caddyfile 会原样留着。插件不去清理别人的机器；清理步骤见 [modules/operations.md](modules/operations.md)。

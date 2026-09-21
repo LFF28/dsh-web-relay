@@ -14,7 +14,7 @@ dsh plugin --profile web add file:/path/to/dsh-web-relay
 
 | 编号 | 约束 | 在设计中落点 |
 | --- | --- | --- |
-| 1 | 轻量化 | 一个 npm 包、两个半边（host 插件 + 一张设置卡片）、host 侧 6 个模块；隧道复用系统 OpenSSH，公网入口复用 Caddy，不自研 TLS、协议、密码学 |
+| 1 | 轻量化 | 一个 npm 包、两个半边（host 插件 + 设置菜单里的一个标签页）、host 侧 6 个模块；隧道复用系统 OpenSSH，公网入口复用 Caddy，不自研 TLS、协议、密码学 |
 | 2 | 使用公网中继服务器（腾讯云 / 阿里云） | 服务器主动向中继拨出 SSH 反向转发；中继上只有系统 `sshd` 与 Caddy，不装本项目的任何代码 |
 | 3 | 只服务我一个人，暴露在公网，必须安全 | 中继侧强制 TLS + 网关口令，且只有一个 HTTP 端口；DSH 侧保留权威绑定 Cookie，Cookie 缺的 `Secure` 由中继补上，见 [security.md](security.md) |
 | 4 | 部署转发 `dsh web` | DSH 仍只监听 `127.0.0.1`；浏览器只接触中继，永不直连内网主机 |
@@ -40,7 +40,7 @@ dsh plugin --profile web add file:/path/to/dsh-web-relay
  ┌──────────────────────────────────────────────────────────┐
  │ 内网 DSH 主机                                              │
  │   dsh web  →  WebServer 127.0.0.1:3080（仅 loopback）      │
- │   dsh-web-relay 插件：守护 ssh 子进程 + 设置卡片             │
+ │   dsh-web-relay 插件：守护 ssh 子进程 + 设置 ▸ 远程访问      │
  └──────────────────────────────────────────────────────────┘
 ```
 
@@ -56,9 +56,9 @@ dsh plugin --profile web add file:/path/to/dsh-web-relay
 
 1. 把插件装进 profile，重启 `dsh web`。
 2. 在**服务器本机**用浏览器打开 `http://127.0.0.1:3080`。首次配置只能在这里做：DSH 的客户端在非 loopback 页面上把设置持久化降级为内存，远程页面写不了设置（见 [security.md](security.md)）。
-3. 打开 设置 ▸ 插件 ▸ **Web Relay**，填入中继地址、管理账号与网关口令。保存即触发自动引导。
-4. 插件随后自动完成：生成本机专用中继密钥 → 用管理账号登录中继 → 建受限中继用户与 `authorized_keys` → 安装并配置 Caddy → 为中继权威签发证书 → 把权威写进 DSH 的组合层（host trust）→ 拉起 SSH 反向隧道。终端上打印横幅，第一行是访问地址 `dsh-web-relay: https://<权威>/`，随后是中继 CA 指纹、中继主机密钥指纹与 Caddy 版本。引导第 10 步同时把中继上的 CA 根证书取回本机，存在 `$DSH_HOME/dsh-web-relay/ca/root.crt`。
-5. 把 `$DSH_HOME/dsh-web-relay/ca/root.crt` 送到手机上并安装：公网 HTTP 面上没有提供根证书的端点（换票点只换会话，不返回任何文件），所以这一步走本机复制、隔空投送或聊天软件，装之前先与横幅或卡片上的 `caFingerprint` 核对。**唯一需要你决定的是装不装中继 CA**：装了就消除证书警告，不装则每次访问都要手动点过警告且失去身份验证，见 [security.md](security.md) 的"证书与 CA"一节。
+3. 打开 **设置 ▸ 远程访问**，填入中继地址、管理账号与网关口令，点「部署」。部署会把表单写进设置，并在中继上完整跑一遍引导。
+4. 这次部署自动完成：生成本机专用中继密钥 → 用管理账号登录中继 → 建受限中继用户与 `authorized_keys` → 安装并配置 Caddy → 为中继权威签发证书 → 把权威写进 DSH 的组合层（host trust）→ 拉起 SSH 反向隧道。终端上打印横幅，第一行是访问地址 `dsh-web-relay: https://<权威>/`，随后是中继 CA 指纹、中继主机密钥指纹与 Caddy 版本。引导第 10 步同时把中继上的 CA 根证书取回本机，存在 `$DSH_HOME/dsh-web-relay/ca/root.crt`。
+5. 把 `$DSH_HOME/dsh-web-relay/ca/root.crt` 送到手机上并安装：公网 HTTP 面上没有提供根证书的端点（换票点只换会话，不返回任何文件），所以这一步走本机复制、隔空投送或聊天软件，装之前先与横幅或设置页状态区里的 `caFingerprint` 核对。**唯一需要你决定的是装不装中继 CA**：装了就消除证书警告，不装则每次访问都要手动点过警告且失去身份验证，见 [security.md](security.md) 的"证书与 CA"一节。
 6. 手机用浏览器打开裸地址（`https://<权威>/`）并输入网关口令即可使用：中继会把这次访问在内部带到换票点，地址栏里不会出现 `/relay/enter`。
 
 ## 文档索引
@@ -66,11 +66,11 @@ dsh plugin --profile web add file:/path/to/dsh-web-relay
 | 文档 | 内容 |
 | --- | --- |
 | [architecture.md](architecture.md) | 端到端设计：组件职责、端口与监听、启动顺序、三条关键链路 |
-| [configuration.md](configuration.md) | 配置参考：设置面板字段、组合层 `Config`、优先级、变更影响面 |
+| [configuration.md](configuration.md) | 配置参考：设置页字段、组合层 `Config`、优先级、一次部署做了什么 |
 | [security.md](security.md) | 威胁模型、分层防御、不接受的做法、风险接受、已知限制 |
 | [modules/plugin-bundle.md](modules/plugin-bundle.md) | 打包与分发：双半边结构、bundle patch、安装 / 卸载 / 升级 |
-| [modules/settings.md](modules/settings.md) | 设置命名空间与客户端卡片：字段、口令存储、状态回显、重新引导 |
-| [modules/bootstrap.md](modules/bootstrap.md) | 自动引导：用管理账号在中继上完成 sshd / Caddy / 证书配置（前提：公钥登录 + 免密 sudo） |
+| [modules/settings.md](modules/settings.md) | 设置命名空间与设置页：字段、口令存储、状态回显、部署怎么被触发 |
+| [modules/bootstrap.md](modules/bootstrap.md) | 引导：部署时用管理账号在中继上完成 sshd / Caddy / 证书配置（前提：公钥登录 + 免密 sudo） |
 | [modules/trust.md](modules/trust.md) | 权威注册与启动自检：把"手机 403"变成"启动即报错" |
 | [modules/tunnel.md](modules/tunnel.md) | SSH 反向隧道守护：子进程、重连、释放、诊断 |
 | [modules/entry.md](modules/entry.md) | 裸地址入口与登录接续：不含秘密的访问地址、内部换票点 `/relay/enter`、CA 分发 |

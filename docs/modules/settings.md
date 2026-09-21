@@ -1,4 +1,4 @@
-# 设置命名空间与客户端卡片
+# 设置命名空间与设置页
 
 插件把部署参数放在 settings 里，而不是放在 `cordis.patch.yml` 里。理由是这些值有写入者、生命周期、保密级别三个属性都对不上 patch：它们由用户填写、在运行期变化、其中一个是口令。
 
@@ -6,92 +6,95 @@
 
 | 命名空间 | 拥有者 | 注册方式 | 用途 |
 | --- | --- | --- | --- |
-| `web-relay` | 用户写，插件读 | `ctx.settings.installSection(ctx, 'web-relay', Config, base, hooks)` | 部署参数，字段见 [configuration.md](../configuration.md) |
-| `web-relay-record` | 插件写，用户只读 | `ctx.settings.register('web-relay-record', Config, { base })` | 引导状态与生成物，卡片唯一的宿主状态通道 |
+| `web-relay` | 用户写，插件读 | `ctx.settings.register('web-relay', Deployment, { validate })` | 部署参数，字段见 [configuration.md](../configuration.md) |
+| `web-relay-record` | 插件写，用户只读 | `ctx.settings.register('web-relay-record', Record)` | 引导状态与生成物，设置页唯一的宿主状态通道 |
 
-`web-relay` 用 `installSection`，因为它需要 `setSource`/`onChange` 这对钩子：`setSource` 让插件始终持有"当前权威值"的取值函数（settings 服务在时取设置层，服务不在时回落到组合层默认值）；`onChange` 在用户保存、设置文档被外部改动、以及设置服务挂载或卸载时都会触发，插件在这里做一次规范化并决定要重做什么。注册时传 `applies: 'live'`，描述符会如实告诉界面这些改动不需要重启。
+`web-relay` 带一条交叉字段校验：地址形状非法、或者填了地址却没有口令时，写入在落盘前就被拒。这两条都是"存下去之后没人能诊断"的错——前者让围栏在运行期回 403，后者的表现是一份空哈希的网关配置。
 
-`settings.yaml` 被监听（约 100 ms 去抖），提供方通过比对文件内容抑制自己写出的那次变更，因此手工编辑这个文件与在卡片里保存等效，都会走同一个 `onChange`，都不需要重启 `dsh web`。
+`web-relay-record` 由插件通过 `scope.update(patch)` 逐次合并写入。它同样带交叉字段约束（步骤表、状态与隧道状态都是闭集），写入方在 `update` 时就会失败，而不是存下一个会让拥有者静默失效的值。
 
-`web-relay-record` 用 `register`，因为它需要返回的作用域去写：插件通过 `scope.replace(section)` 发布整份记录。它同样带一个 `validate`，用交叉字段约束挡住"插件不该接受的组合"，让写入方在 `update`/`replace` 时就失败，而不是存下一个会让拥有者静默失效的值。
+`settings.yaml` 被监听（约 100 ms 去抖），提供方通过比对文件内容抑制自己写出的那次变更。因此手工编辑这个文件与在设置页点部署等效：两者都产生一次真实的文档提交，都触发一遍完整引导。
 
 两个命名空间都注册在插件的 fiber 上，所以卸载插件会连同命名空间和观察者一起消失。
 
-## 卡片
+## 设置页
 
-卡片是插件唯一的用户界面，也是首次配置的入口。
+设置页是插件唯一的用户界面，也是首次配置的入口。它位于 **设置 ▸ 远程访问**：客户端半边向 `settings.section` 注册一个标签页，而不是向插件页注册一张卡片。
 
-**注册。** 客户端半边向 `plugins.item` 注册一张卡片。该槽位是 `kind: 'list'`、`scope: 'root'`，拥有者每次渲染都拿到 `{ view: 'summary' | 'page' }`：`summary` 是卡片标题下的一行，`page` 是展开后的表单本体：
+**注册。** 该槽位是 `kind: 'list'`、`scope: 'root'`，拥有者把每个注册项渲染成导航栏里的一行并只挂载当前激活的那一页：
 
 ```
-ctx.slots.inject('plugins.item', () => ctx.slots.register({
-  name: 'plugins.item',
+ctx.slots.inject('settings.section', () => ctx.slots.register({
+  name: 'settings.section',
   id: 'web-relay',
-  order: <序号>,
-  label: () => <卡片标题>,
+  order: 30,
+  label: () => <标签页标题>,
   locale: NS,
-  inject: () => card.inject(),
-}, WebRelayCard))
+  inject: () => page.inject(),
+}, RelaySection)
 ```
 
-`id` 与 `order` 决定卡片在插件列表里的身份与位置，`label` 与 `locale` 提供标题文案，`inject` 返回卡片需要的服务面。槽位是这套 UI 给仓外插件的正式扩展点：插件在宿主注册自己的命名空间，在浏览器注册自己的卡片，插件页只负责摆放卡片，永远不知道这个命名空间是什么意思。
+`id` 与 `order` 决定这一行在导航栏里的身份与位置（30，排在内建的归档会话页之后），`label` 与 `locale` 提供标题文案，`inject` 返回页面需要的业务面。注册时不声明 `children`：设置页只有一整页这一种形态。导航图标由外壳按 `id` 决定，未知 `id` 回退成设置齿轮图标；这是外壳写死在源码里的表，插件不参与，也不为它去改 DSH。
 
-**读取。** 卡片用 `ctx.settingsScope.bind({ namespace: 'web-relay' })` 拿到自己的作用域，再用同一套服务拿到 `web-relay-record` 的只读作用域。宿主状态与用户输入因此走同一条通道，插件不需要自己的 Remote 命名空间——那会要求 typert 生成器参与构建，属于"为一个状态面板引入一整套代码生成"的成本。
+**读取。** 页面用 `ctx.settingsScope.bind({ namespace: 'web-relay' })` 拿到自己的作用域，再用同一套服务拿到 `web-relay-record` 的只读作用域。宿主状态与用户输入因此走同一条通道，插件不需要自己的 Remote 命名空间——那会要求 typert 生成器参与构建，属于"为一个状态面板引入一整套代码生成"的成本。
 
-**表单。** 卡片自己暂存草稿，只在用户点保存时写一次。每次设置写入都是一次带修订号栅栏的持久文档变更，逐字段提交会把一次编辑变成用户没要求也无法预览的多次写入。口令字段没有可回填的值（凭据不回传），所以草稿初始为空，空草稿不写任何东西，控件显示"已设置 / 未设置"。
+**表单。** 表单在挂载时读一次设置，之后的编辑只留在浏览器内存里。点部署时把这些值连同部署计数写成**一次** `mutate`：每次设置写入都是一次带修订号栅栏的持久文档变更，逐字段提交会把一次编辑变成用户没要求也无法预览的多次写入。口令字段没有可回填的值（凭据不回传），所以那个输入框永远是空的，而且**每次部署都必须重填**——填不出来的话，这一页没有任何办法知道上一次的口令是什么。
 
-**状态区。** 卡片用 `web-relay-record` 渲染：状态、权威、访问地址、CA 指纹、逐步引导结果、最近一次错误、最近一次转发前预检。记录的 `state` 取 `unconfigured`、`bootstrapping`、`ready`、`failed` 之一，`tunnelState` 取 `stopped`、`starting`、`running`、`backing-off` 之一；卡片的隧道状态直接读这一条记录，不走宿主 RPC。状态区是只读的。
+**状态区。** 页面用 `web-relay-record` 渲染：状态、权威、访问地址、CA 指纹、逐步引导结果、最近一次错误、最近一次转发前预检。记录的 `state` 取 `unconfigured`、`bootstrapping`、`ready`、`failed` 之一，`tunnelState` 取 `stopped`、`starting`、`running`、`backing-off` 之一；页面的隧道状态直接读这一条记录，不走宿主 RPC。状态区是只读的。
 
 **按钮。**
 
 | 按钮 | 动作 |
 | --- | --- |
-| 保存 | 写 `web-relay`；插件在 `onChange` 里规范化并重新引导受影响的步骤 |
-| 重新引导 | 把 `bootstrapRequest` 加一后保存 |
-| 重新拉起隧道 | 把 `tunnel.autoStart` 写为真；隧道守护会立即重连 |
+| 部署 | 把表单与部署计数写成一次 `mutate`；宿主观察到这次提交后在中继上完整重跑一遍引导 |
+| 放弃修改 | 把页面上的草稿丢掉，重新映照当前文档 |
+
+没有「保存」按钮，也没有「重新引导」「重新拉起隧道」按钮：一次部署就是一次完整重跑，改动只在点部署的那一刻生效。
+
+## 一次部署是怎么发生的
+
+```
+点部署（或手工改 settings.yaml）
+  → 一次原子写入：vps.*、gateway.*、tunnel.autoStart、bootstrapRequest + 1
+  → 设置服务提交（解析后的值确实变了才会通知）
+  → 宿主观察者（按提交顺序串行）读到当前设置并跑完整引导第 0–13 步
+  → 每步结果、状态与指纹逐次写回 web-relay-record
+```
+
+写入本身就是请求：宿主不比较新旧部署，也不判断"改了哪一半"。`bootstrapRequest` 因此只做一件事——设置服务对解析后的值做深层相等短路，写入与现值完全相同时既不通知观察者也不推进修订号；有一个每次加一的字段，"一个字都没改也要重来一遍"才是一次真实的文档变更。宿主读都不读它。
+
+链路是单向的：只有 `web-relay` 的提交会启动一次重新配置，`web-relay-record` 的写入不会再触发它。
+
+**启动不是一次部署。** 重启 profile 只做恢复：读一次设置与记录、把当前权威注册进围栏、并在记录说 `ready` 且权威与当前配置一致且 `tunnel.autoStart` 为真时重新拉起隧道。隧道是一条活的连接，不随进程重启存活，而中继上配好的东西还在；重新配置中继只发生在有人点部署（或改了设置文档）的时候。
 
 ## 密钥处理
 
 `gateway.password` 用 `z.string().role('secret')` 声明。设置描述符在 `redactSecrets` 下把这个字段整体移出 `value`/`base`/`user`，改放进 `secrets` 列表，只报"在哪些路径上已设置"。于是：
 
-- 口令值从不进入发给浏览器的响应，卡片无法显示也无法回填它。
+- 口令值从不进入发给浏览器的响应，设置页无法显示也无法回填它，每次部署都要重填。
 - 口令值仍以明文存在 `$DSH_HOME/settings.yaml`（`0600`）。这是选择"用户自填口令"的必然结果，写在这里以免被误认为已加密。
 - 引导时明文只出现在一处：交给中继上 `caddy hash-password` 的 stdin。它不出现在任何命令行参数、日志、记录或临时文件里。
+
+`web-relay-record.gateway.sessionSecret` 同样是 `role('secret')`：页面看不到它，但它就是记录里那条网关会话 Cookie 的比对值。每次部署都会重新生成——口令每次都可能不同，而它必须跟着口令一起换。
 
 管理账号不走口令：公钥登录与免密 sudo 是用户事先准备好的前提，插件不存管理口令，见 [configuration.md](../configuration.md) 的"配置前的前提"。
 
 `vps.identityFile` 指向管理账号私钥。插件只把它拼进 `-i`，不读取、不复制、不改权限；文件权限不对时 `ssh` 自己会拒绝，插件只把原始错误转述出来。
 
-## 首次配置必须在本机完成
+## 首次配置与每次部署都必须在本机完成
 
-DSH 的客户端在非 loopback 页面上把设置持久化降级为内存，`settingsScope` 因此报告 `writable: false`、`mode: 'memory'`，写入不落盘。这意味着：
+DSH 的客户端在非 loopback 页面上把设置持久化降级为内存，describe 读不到任何命名空间，这个标签页因此**在远程页面上根本不会注册**：
 
-- 卡片在服务器本机的 `http://127.0.0.1:<port>` 页面上可用。
-- 通过中继打开的手机页面上，卡片只读，保存按钮不可用。
+- 在服务器本机的 `http://127.0.0.1:<port>` 页面上，标签页出现、表单可写、部署按钮可用。
+- 通过中继打开的手机页面上没有这个入口，设置页里也不会出现它的痕迹。
 
-这不是插件可以绕过的限制，而是流程的一部分：**首次配置与所有重新引导都在服务器本机做**，远程只需打开访问地址并输入网关口令。列出全部"必须本地完成的操作"的地方是 [operations.md](operations.md)。
+这不是插件可以绕过的限制，而是流程的一部分：**首次配置与每一次部署都在服务器本机做**，远程只需打开访问地址并输入网关口令。列出全部"必须本地完成的操作"的地方是 [operations.md](operations.md)。
 
 首次配置只能在本机做还有一层便利：此时权威尚未注册，手机根本还开不了那个页面。
 
-## 变更传播
-
-一次保存之后，插件在 `onChange` 里走同一条链路：
-
-```
-设置提交
-  → 规范化成 Deployment（地址、账号身份、路径）
-  → 对比上一份 Deployment，得出变了什么
-  → 权威变了：重解析 connection 行（见 trust.md），把 publicAuthority 写进记录
-  → 凭据或地址变了：重置引导游标，按 bootstrap.md 从受影响的步骤开始
-  → 隧道目标变了：重启隧道子进程
-  → 每次变更后重写 web-relay-record
-```
-
-链路是单向的：只有设置提交会启动一次重配置，`web-relay-record` 的写入不会再触发它（插件自己写记录时不再走 `onChange` 的判断，因为记录的差异不参与 `Deployment` 的规范化）。
-
 ## 客户端半边的加载
 
-卡片要作为仓外包被浏览器加载，需要包满足平台的三件事：
+设置页要作为仓外包被浏览器加载，需要包满足平台的三件事：
 
 | 要求 | 落点 |
 | --- | --- |
@@ -99,16 +102,17 @@ DSH 的客户端在非 loopback 页面上把设置持久化降级为内存，`se
 | 浏览器名册包含它 | `package.json` 的 `dsh.client = { platform: 'web', inject: [ … ] }` |
 | 打包成闭包工厂 | 产物调用 `window.__ModuleLoader__.load({ id, factory })`，外部依赖经注入的 `require` 解析 |
 
-平台模块表是封闭的，只有九项：`react`、`react/jsx-runtime`、`react-dom`、`react-dom/client`、`@deepseek-ai/cordis`、`@deepseek-ai/dsh-client-store`、`@deepseek-ai/dsh-client-ui-slots`、`@deepseek-ai/dsh-client-ui-primitives`、`@deepseek-ai/dsh-client-ui-dockkit`。卡片的运行期 import 只用得到其中四到五项，其余能力全部走服务：`ctx.slots`、`ctx.settingsScope`、`ctx.locale`。仓库内的 `CardForm` 与 `PluginCard` 不对外导出，所以卡片用 `@deepseek-ai/dsh-client-ui-primitives` 的既有控件自绘表单与状态区，文案走 `ctx.locale` 的字典。
+平台模块表是封闭的，只有九项：`react`、`react/jsx-runtime`、`react-dom`、`react-dom/client`、`@deepseek-ai/cordis`、`@deepseek-ai/dsh-client-store`、`@deepseek-ai/dsh-client-ui-slots`、`@deepseek-ai/dsh-client-ui-primitives`、`@deepseek-ai/dsh-client-ui-dockkit`。页面本体只用得到其中三到四项，其余能力全部走服务：`ctx.slots`、`ctx.settingsScope`、`ctx.locale`。仓库内的 `CardForm` 与 `PluginCard` 不对外导出，所以页面用 `@deepseek-ai/dsh-client-ui-primitives` 的既有控件自绘表单与状态区，文案走 `ctx.locale` 的字典。
 
-`dsh.client.inject` 列出必须先加载的客户端半边，这里至少是 `@deepseek-ai/dsh-client-ui-settings`（`ctx.settingsScope` 的声明方）与 `@deepseek-ai/dsh-client-ui-plugin-manager`（`plugins.item` 的声明方）。槽位声明与加载顺序不一致时 `ctx.slots.inject` 会等待，所以列出顺序只影响首屏出现卡片的早晚。
+`dsh.client.inject` 列出必须先加载的客户端半边：`@deepseek-ai/dsh-client-locale`（`ctx.locale`）、`@deepseek-ai/dsh-client-ui-renderer`（`ctx.slots`）与 `@deepseek-ai/dsh-client-ui-settings`（`ctx.settingsScope`，也是 `settings.section` 槽位类型所在的包）。槽位声明与加载顺序不一致时 `ctx.slots.inject` 会等待，所以列出顺序只影响首屏出现标签页的早晚。
 
 ## 失败模式
 
 | 现象 | 原因 | 表现 |
 | --- | --- | --- |
-| 卡片不存在 | 客户端半边没被打进名册，或 `exports['./client']` 缺失 | 插件功能正常，但没有界面；`dsh --dump-config` 仍能看到行 |
-| 卡片显示"命名空间未提供" | 宿主注册失败或插件行未加载 | 卡片渲染空态，不报错 |
-| 保存按钮不可用 | 当前页面不是 loopback | 只读态，见上文 |
-| 保存被拒 | `validate` 拒绝了这个组合 | 界面保留草稿并显示原因，文档不变 |
-| 保存成功但没有动作 | 改动不影响 `Deployment` | 记录不变，只有 `updatedAt` 前移 |
+| 设置里没有这个标签页 | 客户端半边没被打进名册，或 `exports['./client']` 缺失 | 插件功能正常，但没有界面；`dsh --dump-config` 仍能看到行 |
+| 设置里没有这个标签页，本机也没有 | 宿主没在服务这两个命名空间（插件行未加载、或注册失败） | 页面不注册，不报错 |
+| 表单只读 | 当前页面不是 loopback（内存模式） | 标签页根本不会注册；宿主文档只读时也会禁用全部控件 |
+| 部署按钮不可用 | 地址或网关口令为空、正在写入、或宿主文档不可写 | 表单下方给出原因 |
+| 部署后出现"设置没有写入" | `validate` 拒了这个组合（地址形状非法、口令为空），或修订号栅栏判定文档被别处改过 | 页面保留草稿并显示这句话，文档不变；核对后重试 |
+| 状态区说"就绪"但其实连不上 | 有人在中继侧改了东西，或隧道断了 | 再点一次部署；引导是幂等的 |

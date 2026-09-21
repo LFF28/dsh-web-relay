@@ -110,12 +110,12 @@ ssh
 | --- | --- |
 | `Deployment` 不齐全（缺 `vps.host`） | 不起隧道，记录显示等待配置 |
 | `Deployment` 齐全，引导尚未成功 | 引导第 12 步起隧道 |
-| 引导已是 `ready`，`tunnel.autoStart` 为真 | 启动时直接起隧道 |
-| `tunnel.autoStart` 置为 `false` | 停隧道，且不再自动拉起；公网入口返回隧道不可达页面 |
-| `vps.host` / `vps.port` / `vps.user` / `vps.identityFile` 变化 | 停掉旧子进程，用新参数重新起（不需要重启 profile）；新凭据同时用于预检 |
+| 启动时记录已是 `ready`、权威一致，且 `tunnel.autoStart` 为真 | 重新拉起隧道 |
+| `tunnel.autoStart` 为 `false` | 停隧道，且不再自动拉起；公网入口返回隧道不可达页面 |
+| `vps.host` / `vps.port` / `vps.user` / `vps.identityFile` 变化（经一次部署） | 停掉旧子进程，用新参数重新起（不需要重启 profile）；新凭据同时用于预检 |
 | `ctx.webServer` 的端口变化 | 同上；端口只在 DSH 重启时才会变，实际等于一起重启 |
 
-引导记录已是 `ready` 且权威没变时，重启 DSH 不会重跑引导，但隧道会被重新建立：它是一条活的连接，不随进程重启存活。要再跑一遍引导只能显式触发"重新引导"。
+重启 DSH 从不重跑引导，只做恢复：记录已是 `ready`、权威一致且 `tunnel.autoStart` 为真时，隧道会被重新建立——它是一条活的连接，不随进程重启存活。要再跑一遍引导只能在设置页点一次「部署」。
 
 ## 生命周期与释放
 
@@ -179,14 +179,14 @@ ctx.effect(() => {
 
 ```ts
 export interface RelayStatus {
+  /** 引导与隧道的合并状态。 */
+  state: 'unconfigured' | 'bootstrapping' | 'ready' | 'failed'
+  /** 已生效的权威；未配置时为空。 */
+  authority: string
   /** 隧道状态。 */
-  state: 'starting' | 'running' | 'backing-off' | 'stopped'
-  /** 本状态开始的时刻（毫秒时间戳）。 */
-  since: number
-  /** 累计成功建立转发的次数。 */
-  connectedCount: number
-  /** 最近一次退出的退出码与 stderr 摘要；从未退出时为 undefined。 */
-  lastExit?: { exitCode: number | null; signal: string | null; message: string }
+  tunnel: 'starting' | 'running' | 'backing-off' | 'stopped'
+  /** 本次连接已经活了多久（毫秒）；未连接时为 undefined。 */
+  tunnelUptimeMs?: number
   /** 最近一次转发前预检的结果；从未运行时为 undefined。 */
   lastPreflight?: {
     /** `free` 空闲；`released` 杀掉了残留；`skipped` 预检没跑成；`refused` 被占但不是本部署的残留。 */
@@ -194,7 +194,9 @@ export interface RelayStatus {
     /** `skipped` 与 `refused` 的原因原文。 */
     message?: string
   }
+  /** 最近一次失败的原文摘要，成功时为空。 */
+  lastError: string
 }
 ```
 
-`status()` 返回快照（每次调用新建对象），不返回内部可变结构。它与 `trustedHosts`、`authority()` 一起在同一个同步 `provide` 里给出，因此卡片与自检在 `apply` 返回后立刻就能读它。
+`status()` 返回快照（每次调用新建对象），不返回内部可变结构。它与 `trustedHosts`、`authority()` 一起在同一个同步 `provide` 里给出，因此设置页与自检在 `apply` 返回后立刻就能读它。

@@ -20,7 +20,7 @@
  ┌───────────────────────────────────────────────────────────┐
  │ 内网 DSH 主机                                               │
  │   dsh web            WebServer 127.0.0.1:3080（仅 loopback） │
- │   dsh-web-relay 插件  守护 ③（含预检）+ 自动引导 + 设置卡片  │
+ │   dsh-web-relay 插件  守护 ③（含预检）+ 手动部署 + 设置页    │
  └───────────────────────────────────────────────────────────┘
 ```
 
@@ -35,13 +35,13 @@
 | 平面 | 载体 | 写入者 | 内容 |
 | --- | --- | --- | --- |
 | 行为旋钮 | 包内 `cordis.patch.yml` 的行 `config` | 包作者 | 超时、退避序列、入口与自检开关、日志标签；都带默认值，无需配置即可运行 |
-| 部署参数 | settings 命名空间 `web-relay` | 用户在设置卡片里填 | 中继地址、管理账号与其私钥路径、网关口令、主机密钥指纹固定 |
+| 部署参数 | settings 命名空间 `web-relay` | 用户在设置页里填，点部署才写下去 | 中继地址、管理账号与其私钥路径、网关口令、主机密钥指纹固定 |
 | 运行记录 | settings 命名空间 `web-relay-record` | 插件 | 引导状态、观察到的指纹、访问地址、CA 指纹、引导步骤结果 |
 
 把部署参数放进 settings 而不是 patch 文件，有三个直接后果：
 
 - 密钥与口令不进 patch 文件，拿到一次 `cordis.patch.yml` 副本的人不会同时拿到凭据。
-- 用户在设置卡片里改地址或口令，插件在同一进程内完成重配置，不需要编辑 YAML、不需要重启 `dsh web`。
+- 用户在设置页点部署，插件在同一进程内完成重配置，不需要编辑 YAML、不需要重启 `dsh web`。
 - 插件在加载期几乎没有可失败的自包含校验，因此不会因为填错地址把 profile 变成起不来的状态；错误在引导步骤里以文本呈现。
 
 字段参考见 [configuration.md](configuration.md)，机制见 [modules/settings.md](modules/settings.md)。
@@ -79,7 +79,7 @@ Host 半边（`lib/index.js`）暴露一个 `dsh-web-relay` 插件，内部按�
 | `tunnel` | 转发前预检（清掉上一轮残留的监听端点）、SSH 反向转发子进程的生命周期、退避、健康判定、拆除，见 [modules/tunnel.md](modules/tunnel.md) |
 | `entry` | `/relay/enter` 一条精确路由（换票点）：只把启动令牌换成 DSH Cookie；中继把裸地址上的文档导航在内部改写到它，见 [modules/entry.md](modules/entry.md) |
 
-Client 半边（`lib/client.js`）只做一件事：向 `plugins.item` 注册一张以 `web-relay` 为 `id` 的设置卡片。卡片自绘表单与状态区，只依赖平台模块表里的 `react`、`react/jsx-runtime`、`@deepseek-ai/dsh-client-store`、`@deepseek-ai/dsh-client-ui-primitives`，其余全部走服务：`ctx.slots`、`ctx.settingsScope`、`ctx.locale`。
+Client 半边（`lib/client.js`）只做一件事：向 `settings.section` 注册一个以 `web-relay` 为 `id` 的标签页（设置 ▸ 远程访问）。页面自绘表单与状态区，只依赖平台模块表里的 `react`、`react/jsx-runtime`、`@deepseek-ai/dsh-client-ui-primitives`，其余全部走服务：`ctx.slots`、`ctx.settingsScope`、`ctx.locale`。
 
 ## 服务
 
@@ -94,10 +94,10 @@ Client 半边（`lib/client.js`）只做一件事：向 `plugins.item` 注册一
 ## 启动时序
 
 1. `web-relay` 行 `apply`：读 `ctx.webServer.port` 得到本机端口，注册 `/relay/enter` 一条精确路由（`entry.enabled` 为假时它回 `403`，路由本身仍在），同步 `provide` `webRelay`。
-2. `apply` 内用 `ctx.inject(['settings'], …)` 注册两个命名空间。settings 已在更早的基础层行里就绪，回调同步执行，因此**已知的权威在第一次解析 `connection` 行时就可用了**。
+2. 行级注入 `['settings', 'subprocess', 'webServer']` 满足后 `apply` 继续，注册两个命名空间。settings 已在更早的基础层行里就绪，因此**已知的权威在第一次解析 `connection` 行时就可用了**。
 3. `connection` 行按注入出现而激活，围栏拿到权威列表。
-4. 若 settings 里部署参数齐全，`autoStart` 打开时插件按 [modules/bootstrap.md](modules/bootstrap.md) 的顺序引导并拉起隧道；若上次运行已完成引导，则直接拉起隧道。
-5. 引导改变权威时，`trust` 重解析 `connection` 行，围栏在数毫秒内接受新权威。
+4. 启动只做恢复：读一次设置与记录，把当前权威注册进围栏并跑一次回环自检；记录说 `ready`、权威与当前配置一致且 `autoStart` 为真时重新拉起隧道。**重启不引导**。
+5. 用户在设置页点部署（或手工改设置文档）时，插件按 [modules/bootstrap.md](modules/bootstrap.md) 的顺序完整跑一遍引导并拉起隧道；权威变化时 `trust` 重解析 `connection` 行，围栏在数毫秒内接受新权威。
 
 ## 不变量
 

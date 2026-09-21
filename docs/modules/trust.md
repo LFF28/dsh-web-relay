@@ -12,7 +12,7 @@ DSH 的 `/api` 在认证之前有一道 Host/Origin 围栏（失败返回 **403*
 
 ## 权威从哪来
 
-权威由用户在设置卡片里填的两个字段推出，没有第三个来源：
+权威由用户在设置页填的两个字段推出，没有第三个来源：
 
 ```
 publicAuthority = canonicalAuthority(vps.host) + ':' + gateway.port
@@ -21,7 +21,7 @@ publicAuthority = canonicalAuthority(vps.host) + ':' + gateway.port
 
 规范化在插件自己的 `src/authority.ts` 里完成，不调用 DSH 的导出——`@deepseek-ai/dsh-client-connection` 并不导出这些助手。它按 `packages/client/connection/src/api-request-trust.ts` 的语义重新实现了 `parseAuthority`、`explicitPort`、`canonicalAuthority`、`isBareAuthority`、`publicAuthority` 与 `canonicalHostname`：
 
-- 形状校验（`isBareAuthority`）要求裸的规范 `host[:port]`，不能带 scheme、path、userinfo。**形状非法时设置保存被拒**，界面保留草稿并显示原因，文档不变。
+- 形状校验（`isBareAuthority`）要求裸的规范 `host[:port]`，不能带 scheme、path、userinfo。**形状非法时这次部署被拒**，界面保留草稿并显示原因，文档不变。
 - `canonicalAuthority()` 只在权威确实带端口时保留端口，特殊 scheme 的默认端口也算显式：`canonicalAuthority('example.com:443')` 仍是 `'example.com:443'`，与 `'example.com'` 不是同一个权威。IP 字面量不能带端口以外的内容。
 
 一条实用规则：**端口不写就等于"任意端口"**。围栏的权威条目没有端口时按 hostname 比较。设计上仍然要求显式写出中继入口端口（`gateway.port` 默认 `8443`），减少隐式行为。
@@ -38,11 +38,11 @@ publicAuthority = canonicalAuthority(vps.host) + ':' + gateway.port
 - `noSave = true` 让 loader 的写回监听器跳过，解析出的字面量不会覆盖配置文件里的表达式。
 - fiber 重启时 `/api` 路由先注销再注册；已建立的 WebSocket 不受影响。
 
-这个动作只在规范化后的权威**真的变了**时执行，普通保存不扰动连接。实现细节与这段推理的依据见 [plugin-bundle.md](plugin-bundle.md)。
+这个动作不做差异判断：每一次部署（以及启动恢复）都会重新解析一次那一行，表达式按当时的权威求值。实现细节与这段推理的依据见 [plugin-bundle.md](plugin-bundle.md)。
 
 与 `webRuntime.trustedHosts` 的关系：`@deepseek-ai/dsh-web-app` 的 `resolveLanTrust(bindHost, extra)` 在 loopback 绑定时给出**空列表**（只有绑 `0.0.0.0` 时才会自动加入 LAN 字面量），所以插件的权威不会被默认值覆盖。插件只读 `webRuntime`，不改它——`webRuntime.trustedHosts` 保持"由 web-app 决定的本机信任集合"，插件贡献的是"由部署决定的外部权威集合"，两者在 `connection` 行合并。
 
-`dsh web` 的 CLI 也有 `--trusted-host <authority...>`（可重复），与 `webRuntime.trustedHosts` 是同一份数据。本插件不使用这条路径，因为它的入口是设置卡片而不是启动命令行。
+`dsh web` 的 CLI 也有 `--trusted-host <authority...>`（可重复），与 `webRuntime.trustedHosts` 是同一份数据。本插件不使用这条路径，因为它的入口是设置页而不是启动命令行。
 
 ## 启动自检
 
@@ -91,9 +91,9 @@ publicAuthority = canonicalAuthority(vps.host) + ':' + gateway.port
 | 探测 ② TLS 证书校验失败 | 客户端不信任中继 CA | 输出根证书指纹，并指向 [entry.md](entry.md) 里把根证书送到设备的方式 |
 | 探测 ② 401 但浏览器仍打不开 | 浏览器侧 Cookie 或网关口令 | 指向 [security.md](../security.md) 的"必须成立的前置条件" |
 | 探测 ② 超时 | 安全组 / Caddy 未监听 / 端口不通 | 指向 [relay-host.md](relay-host.md) 的防火墙清单 |
-| 探测 ③ 拿到 401 而不是 303 | 中继上的 Caddyfile 还是旧版（没有 `@noDsh` 改写） | 重新引导一次，让第 9 步重写并 reload |
+| 探测 ③ 拿到 401 而不是 303 | 中继上的 Caddyfile 还是旧版（没有 `@noDsh` 改写） | 重新部署一次，让第 9 步重写并 reload |
 | 探测 ③ 的 303 里没有 `dsh-auth-…` | 中继上的 Caddyfile 是旧版 | 同上 |
-| 探测 ③ 的 Cookie 没有 `Secure` | `header_down` 没生效 | 检查上游片段是否被人改过，重新引导一次 |
+| 探测 ③ 的 Cookie 没有 `Secure` | `header_down` 没生效 | 检查上游片段是否被人改过，重新部署一次 |
 | 探测 ④ 不是 200 | 换来的 Cookie 被拒（权威绑定的名字对不上） | 打印换到的 Cookie 名与 `webRelay.authority()`，指出差异 |
 
 ### 顺带检出的部署问题
@@ -105,6 +105,6 @@ publicAuthority = canonicalAuthority(vps.host) + ':' + gateway.port
 
 ## 已知不做
 
-- **不做"探测到 403 就静默改配置"。** 权威变化的唯一来源是用户在卡片上的输入，插件不猜。
+- **不做"探测到 403 就静默改配置"。** 权威变化的唯一来源是用户在设置页上的输入，插件不猜。
 - **不改写 Host 来让围栏通过。** 围栏唯一信任的信号是"Host 由浏览器真实给出"；改写它等于拆掉第四层，见 [security.md](../security.md)。
 - **不自动把 `--trusted-host` 加到 CLI 参数里。** 插件无法影响启动命令行，且它不打算把权威变成第二个配置位置。

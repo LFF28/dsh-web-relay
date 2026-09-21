@@ -80,11 +80,11 @@ Cookie 在、但已经失效（换过权威或换过签名密钥）时改写不�
 ```
 dsh-web-relay: https://<publicAuthority>/
   根证书指纹 <caFingerprint>
-  中继主机密钥 <中继主机公钥 SHA256 指纹，或「未固定，见卡片记录」>
+  中继主机密钥 <中继主机公钥 SHA256 指纹，或「未固定，见设置页的状态区」>
   Caddy <版本号，或「沿用已有安装」>
 ```
 
-之所以直接写 stdout，是因为本构建的日志服务没有 console exporter：逐步引导进度走 harness 日志，持久状态写进 `web-relay-record` 记录，访问地址与 CA 指纹需要操作者在终端上直接看到。指纹就是记录里的 `caFingerprint`，与卡片状态区一致，可在中继上对 `data/pki/authorities/dsh-relay/root.crt` 核对。
+之所以直接写 stdout，是因为本构建的日志服务没有 console exporter：逐步引导进度走 harness 日志，持久状态写进 `web-relay-record` 记录，访问地址与 CA 指纹需要操作者在终端上直接看到。指纹就是记录里的 `caFingerprint`，与设置页的状态区一致，可在中继上对 `data/pki/authorities/dsh-relay/root.crt` 核对。
 
 这一行不含任何秘密，因此没有"何时打印"的策略开关。它只在启动时打印，不进入浏览器可见面，因此不需要客户端本地化与快照测试；它不写任何 HTTP 响应体。
 

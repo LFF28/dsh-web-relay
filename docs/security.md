@@ -51,7 +51,7 @@ IP 字面量权威无法使用 HSTS（RFC 6797 明确排除 IP 字面量），�
 
 **这是这条通路上唯一需要你拍板的选项。** 用户有两条路：
 
-- **安装 CA 根证书**（推荐）。根证书只有公钥，可以公开分发。它不经过公网 HTTP 面：引导第 10 步把它取到 `$DSH_HOME/dsh-web-relay/ca/root.crt`，再经本地复制、AirDrop、聊天软件等不依赖 TLS 信任的渠道送到设备；卡片与记录里的 `caFingerprint` 是核对它的 SHA256 指纹，可与 VPS 上 `data/pki/authorities/dsh-relay/root.crt` 逐字核对。iOS 上要先装描述文件，再到 设置 ▸ 通用 ▸ 关于本机 ▸ 证书信任设置 里手动开启完全信任。
+- **安装 CA 根证书**（推荐）。根证书只有公钥，可以公开分发。它不经过公网 HTTP 面：引导第 10 步把它取到 `$DSH_HOME/dsh-web-relay/ca/root.crt`，再经本地复制、AirDrop、聊天软件等不依赖 TLS 信任的渠道送到设备；设置页与记录里的 `caFingerprint` 是核对它的 SHA256 指纹，可与 VPS 上 `data/pki/authorities/dsh-relay/root.crt` 逐字核对。iOS 上要先装描述文件，再到 设置 ▸ 通用 ▸ 关于本机 ▸ 证书信任设置 里手动开启完全信任。
 - **不安装**，每次访问手动点过浏览器的证书警告。这时 TLS 仍然加密流量，但**没有身份验证**：你无法察觉中间人，攻击者只要能劫持到中继 IP 的流量就能读走 Cookie 与口令。这是明确要接受的风险，不是"等价但更省事"的选项。
 
 装好 CA 之前，中间人风险与"完全明文"的差别只在于被动旁听需要主动介入连接；把这一条写在这里，是为了让"不装 CA"是一个被看见的决定。
@@ -105,7 +105,7 @@ Caddy 到 DSH 这一段是 loopback 上的明文 HTTP，Host 原样透传。**�
 
 | 目标 | 动作 | 影响 |
 | --- | --- | --- |
-| 换掉网关口令 | 卡片里改 `gateway.password` 并保存 | 口令重新哈希，同时重置 `gateway.sessionSecret`，所有设备下次进入重新输口令 |
+| 换掉网关口令 | 在设置页重新填 `gateway.password` 并部署 | 口令重新哈希，同时重置 `gateway.sessionSecret`，所有设备下次进入重新输口令 |
 | 作废全部 DSH 会话 | 删除 `$DSH_HOME/.credentials.yaml` 里的 `client-connection/browser-session` 记录并重启 profile | 全部旧 Cookie 校验失败，所有设备下次打开裸地址时由中继自动带回换票点 |
 | 收回隧道权限 | 从 `/etc/dsh-web-relay/authorized_keys` 删掉那一行并 `systemctl reload ssh` | 中继不再接受该反向转发 |
 
@@ -123,7 +123,7 @@ DSH 的客户端在非 loopback 页面上把设置持久化降级为内存（`pe
 | 通用设置的文档导入/导出/重置 | 不可用 | 同上 |
 | 权限的**默认**预设行 | 不可用 | 只是"对未来会话的默认值" |
 | 欢迎页确认 | 不可用 | 一次性状态 |
-| **本插件的设置卡片** | 不可用 | 同上；首次配置与重新引导只能在服务器本机做 |
+| **本插件的设置页** | 不可用 | 非 loopback 页面读不到插件的设置命名空间，这个标签页因此根本不注册；首次配置与每次部署只能在服务器本机做 |
 | 新建/切换工作区、新建会话、对话、文件上传 | 可用 | 会话面不受影响 |
 | 全部 `/api` RPC、两个 WebSocket | 可用 | |
 | `/permission` 切换当前会话的权限预设 | 可用 | 走会话投影 + `/permission <preset>` 命令 |
