@@ -248,6 +248,27 @@ export function preferredFingerprint(fingerprints: readonly HostKeyFingerprint[]
 }
 
 /**
+ * 解析 `sshd` 交给登录 shell 的 `SSH_CONNECTION`，取出本端的公网出口地址。
+ *
+ * 形如 `183.48.247.66 52703 172.16.0.7 22`：第一个字段是客户端地址，也就是内网
+ * 主机在这一跳上对外的地址。它是留给中继侧 `fail2ban` 的 `ignoreip` 的值——出口
+ * 地址会变（换网络、运营商重新分配），所以在每次部署里现取，而不是让人手工填一个
+ * 会过期的常量。
+ *
+ * 取不到时返回 undefined：这个值只用于放宽中继上的封禁，宁可让它继续按默认规则
+ * 计数，也不让一个猜出来的地址进入过滤规则。
+ * @param value - `SSH_CONNECTION` 的原文。
+ * @returns IPv4/IPv6 字面量；没有有效值时 undefined。
+ */
+export function egressAddress(value: string | undefined): string | undefined {
+  const candidate = (value ?? '').trim().split(/\s+/u)[0] ?? ''
+  if (candidate === '') return undefined
+  // `sshd` 只会填字面量地址，但仍要挡住从这里溜进配置文件的东西：fail2ban 的
+  // `ignoreip` 是按空白分词的列表，一个带空格或注释符的值足以改写整行。
+  return /^[0-9a-fA-F.:]+$/u.test(candidate) ? candidate : undefined
+}
+
+/**
  * 取输出的第一行非空内容。
  * @param text - 原始输出。
  * @returns 第一行；没有内容时为空串。

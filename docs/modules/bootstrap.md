@@ -70,6 +70,8 @@
 
 探测命令读 `id -u` 与 `/etc/os-release` 的 `ID`/`VERSION_ID`，并试跑 `sudo -n true` 与 `command -v ss`，据此决定：是否走 `sudo`、包管理器是 `apt` 还是 `dnf`、`sshd` 的单元名是 `ssh` 还是 `sshd`，以及转发前预检能不能在中继上跑。三者中任何一条不成立都在这里停下并报原文：密钥被拒、`sudo` 需要口令、`ss` 不在。
 
+同一次探测还读一遍 `SSH_CONNECTION` 的第一个字段，也就是内网主机在这一跳上对外的地址。它在**提权之前**读（`sudo` 会把 `SSH_CONNECTION` 清掉），第 9 步写 Caddy 侧 jail 时填进 `ignoreip`——公网自检本身会让 Caddy 记一次 `basic_auth` 失败，没有这一条，反复重启就可能把操作者自己封掉。取不到时留空，jail 退回默认封禁规则。
+
 这条探测是"插件不配置管理登录"的兑现方式——公钥登录与免密 sudo 由用户事先准备好，插件只读地确认它们成立。探测不到已知发行版时如实报告"自动安装 Caddy 仅支持 Debian/Ubuntu"，其余步骤继续。
 
 ### 4–5 受限账号与隧道公钥
@@ -141,7 +143,7 @@ fail2ban 用发行版包（`apt-get install -y fail2ban`）即可，`deploy/fail
 
 写完后先 `caddy fmt --overwrite`，再校验：`caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile`。校验要在 `caddy` 账号的环境里跑（`XDG_DATA_HOME=/var/lib/caddy/.local/share`、`XDG_CONFIG_HOME=/var/lib/caddy/.config`），否则本地 CA 的数据目录解析不到，校验会报出一个与配置无关的错。校验通过才 `systemctl reload caddy`；reload 是优雅的，失败时旧配置继续服务。
 
-Caddy reload 之后，同一步再写 Caddy 侧的 fail2ban filter 与 jail（`deploy/fail2ban/`，端口与 `logpath` 由模板代入），然后 `fail2ban-client reload`。jail 写坏不会影响已经工作的入口，因此它的失败不阻断引导，只在步骤结果里标出。
+Caddy reload 之后，同一步再写 Caddy 侧的 fail2ban filter 与 jail（`deploy/fail2ban/`，端口与 `logpath` 由模板代入，`ignoreip` 里的本机出口地址来自第 3 步，见 [relay-host.md](relay-host.md) 第 3 节），然后 `fail2ban-client reload`。jail 写坏不会影响已经工作的入口，因此它的失败不阻断引导，只在步骤结果里标出。
 
 ### 10 CA 根证书
 

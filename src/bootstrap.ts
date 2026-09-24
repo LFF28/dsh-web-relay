@@ -15,7 +15,7 @@ import { delimiter, dirname, join } from 'node:path'
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 import type { BootstrapStep } from './config.js'
 import type { Deployment } from './deployment.js'
-import { commandArgv, firstLine, parseFingerprints, preferredFingerprint, runSsh, shellQuote, type HostKeyFingerprint, type SshRunResult, type SshTarget } from './ssh.js'
+import { commandArgv, egressAddress, firstLine, parseFingerprints, preferredFingerprint, runSsh, shellQuote, type HostKeyFingerprint, type SshRunResult, type SshTarget } from './ssh.js'
 import { managedBlockScript, readTemplate, substitute, wholeFileScript, type ManagedFile } from './templates.js'
 import type { RelayLogger } from './tunnel.js'
 
@@ -192,6 +192,8 @@ export class Bootstrap {
   #tools: Record<string, string> = {}
   /** 第 3 步的环境事实。 */
   #env: RemoteEnvironment | undefined
+  /** 第 3 步取到的内网主机公网出口地址；留给第 9 步的 fail2ban `ignoreip`。 */
+  #egressAddress: string | undefined
   /** 第 7 步观察到的 Caddy 版本。 */
   #caddyVersion = ''
   /** 第 2 步观察到的中继主机公钥指纹。 */
@@ -348,6 +350,7 @@ export class Bootstrap {
     const uid = facts['UID'] ?? ''
     const hasSs = facts['HAS_SS'] === '1'
     const useSudo = uid !== '0'
+    this.#egressAddress = egressAddress(facts['EGRESS'])
     const env: RemoteEnvironment = {
       uid,
       osId: facts['OS_ID'] ?? '',
@@ -543,6 +546,8 @@ export class Bootstrap {
       const filter = await readTemplate('fail2ban/filter.d/caddy-dsh-relay.conf')
       const jail = substitute(await readTemplate('fail2ban/jail.d/caddy-dsh-relay.conf'), {
         GATEWAY_PORT: String(deployment.gatewayPort),
+        // 取不到就是空串：jail 退回默认封禁规则，而不是填一个猜出来的地址。
+        HOME_EGRESS_IP: this.#egressAddress ?? '',
       })
       const script = [
         wholeFileScript({ path: '/etc/fail2ban/filter.d/caddy-dsh-relay.conf', mode: 0o644 }, filter),
@@ -649,6 +654,11 @@ export class Bootstrap {
 /** 第 3 步的探测脚本。只输出 `KEY=VALUE`，便于解析。 */
 const PROBE_SCRIPT = [
   'set -u',
+  // 读出口地址，供第 9 步的 fail2ban `ignoreip` 使用。这次探测不提权（它全程都用
+  // 管理账号跑），因此 sshd 交给登录 shell 的 `SSH_CONNECTION` 还在——`sudo` 会把它
+  // 清掉，所以不能挪到任何一个提权步骤里去取。写 `-` 兜底：万一某天它不在了，这一步
+  // 只是拿不到地址，不该让整条探测失败。
+  'echo "EGRESS=${SSH_CONNECTION-}"',
   'echo "UID=$(id -u)"',
   'if [ -r /etc/os-release ]; then . /etc/os-release; echo "OS_ID=${ID:-}"; echo "OS_VERSION=${VERSION_ID:-}";',
   'else echo "OS_ID="; echo "OS_VERSION="; fi',

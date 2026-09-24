@@ -7,7 +7,7 @@
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { commandArgv, connectionArgv, parseFingerprints, preferredFingerprint, shellQuote } from '../lib/ssh.js'
+import { commandArgv, connectionArgv, egressAddress, parseFingerprints, preferredFingerprint, shellQuote } from '../lib/ssh.js'
 
 /** 一份连接身份。 */
 const TARGET = {
@@ -73,6 +73,20 @@ test('commandArgv 把远程命令收成单独一个参数', () => {
   const argv = commandArgv(TARGET, 'sudo -n true')
   assert.equal(argv.at(-1), 'sudo -n true')
   assert.equal(argv.filter(word => word === 'sudo -n true').length, 1)
+})
+
+test('egressAddress 只接受字面量地址', () => {
+  assert.equal(egressAddress('183.48.247.66 52703 172.16.0.7 22'), '183.48.247.66')
+  assert.equal(egressAddress('2001:db8::1 52703 172.16.0.7 22'), '2001:db8::1')
+  // 取不到就返回 undefined，让 jail 退回默认规则，而不是填一个空值或猜的值。
+  assert.equal(egressAddress(undefined), undefined)
+  assert.equal(egressAddress(''), undefined)
+  assert.equal(egressAddress('   '), undefined)
+  // ignoreip 是按空白分词的列表，能溜进来的只该是地址本身。
+  assert.equal(egressAddress('1.2.3.4\nbantime = 0'), '1.2.3.4')
+  assert.equal(egressAddress('evil.example'), undefined)
+  assert.equal(egressAddress('1.2.3.4 # 注释'), '1.2.3.4')
+  assert.equal(egressAddress('#1.2.3.4'), undefined)
 })
 
 test('parseFingerprints 只取带类型的主机行', () => {
