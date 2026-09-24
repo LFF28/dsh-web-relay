@@ -63,7 +63,7 @@ export interface RelayDraft {
   readonly gatewayPort: string
   /** 网关口令。必填：它是 `role('secret')` 字段，从来不回传浏览器，所以每次部署都要重填。 */
   readonly password: string
-  /** 部署完成后是否维持隧道。 */
+  /** DSH 重启后是否自动恢复隧道。 */
   readonly autoStart: boolean
 }
 
@@ -94,7 +94,7 @@ export interface RelayDeploymentView {
   }
   /** `tunnel` 一节。 */
   readonly tunnel?: {
-    /** 部署完成后是否维持隧道。 */
+    /** DSH 重启后是否自动恢复隧道。 */
     readonly autoStart?: boolean
   }
   /** 单调递增的部署请求计数；点一次部署加一。 */

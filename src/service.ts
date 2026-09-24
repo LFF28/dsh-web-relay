@@ -221,6 +221,8 @@ export class RelayRuntime {
 
     const record = this.#settings.record()
     if (record.state !== 'ready' || record.publicAuthority !== deployment.authority) return
+    // 这个开关只在这里生效：重启后要不要把隧道接回来。部署不看它——引导第 12 步总会
+    // 建立隧道并等它健康，那一步同时是"转发确实通了"的验证。
     if (deployment.autoStart) await this.#tunnel.start(deployment)
     else await this.#tunnel.stop()
   }

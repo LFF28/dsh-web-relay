@@ -26,7 +26,7 @@ export interface Deployment {
   readonly gatewayPort: number
   /** 网关口令；为空表示尚未配置。 */
   readonly password: string
-  /** 部署完成后是否维持隧道。 */
+  /** DSH 重启后是否自动恢复隧道。部署本身不看它。 */
   readonly autoStart: boolean
   /** 由 `host` 与 `gatewayPort` 推出的公网权威；`host` 为空或形状非法时为 undefined。 */
   readonly authority: string | undefined

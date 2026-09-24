@@ -38,7 +38,7 @@
 | `vps.hostKeyFingerprint` | `string?` | 空 | 期望的中继主机公钥指纹，`SHA256:…` 形式。留空时首次连接按 TOFU 记录并打印指纹 |
 | `gateway.port` | `number` | `8443` | 公网入口 HTTPS 端口，也是中继上唯一的 HTTP 端口。权威即 `<vps.host>:<gateway.port>` |
 | `gateway.password` | `secret?` | 空 | 网关口令，用户自选，手机每次进入时在浏览器口令框里输入。**每次部署都要重填**：它是 `secret` 字段，从不回传浏览器。填了地址却没有口令时写入被拒。插件只把它交给 `caddy hash-password`，明文不落中继的磁盘 |
-| `tunnel.autoStart` | `boolean` | `true` | 部署完成后是否维持隧道；关掉后引导照样跑完，但 DSH 重启也不会恢复连接 |
+| `tunnel.autoStart` | `boolean` | `true` | DSH 重启后是否自动恢复隧道。**只影响重启**：关掉后每次重启都要重新点一次部署。部署本身不看它——引导第 12 步总会建立隧道并验证转发 |
 | `bootstrapRequest` | `number` | `0` | 部署计数：点一次部署加一。它让"一个字都没改也要重来一遍"成为一次真实的文档变更；宿主不读它 |
 
 标记为 `secret` 的字段在发给浏览器时被替换成"已设置 / 未设置"，值本身不出宿主进程；`settings.yaml` 里仍是明文，文件权限是 `0600`，目录 `0700`。
@@ -82,7 +82,7 @@
 | `gateway.password` | 重新哈希并 reload Caddy，同时重置 `gateway.sessionSecret` | 所有设备的网关会话立刻失效，下次进入重新询问口令 |
 | `vps.user`、`vps.port`、`vps.identityFile` | 引导与转发前预检改用新凭据 | 引导步骤用新凭据重跑一遍，已就绪的步骤快速跳过 |
 | `vps.hostKeyFingerprint` | 与观察值比对 | 不匹配时引导停止在这一步，不会带着未验证的连接继续 |
-| `tunnel.autoStart` 置为 `false` | 引导跑完后停掉隧道 | 公网入口返回隧道不可达页面；下次重启 DSH 也不会自动恢复 |
+| `tunnel.autoStart` 置为 `false` | 这次部署照常建立并验证隧道；差别只在以后的重启 | 部署完仍可访问，直到下一次重启 DSH——那之后公网入口返回隧道不可达页面，要点一次部署才恢复 |
 | `bootstrapRequest` 递增 | 本身就是一次部署 | 端口、证书、`authorized_keys` 都已就绪时很快结束 |
 
 部署失败时配置文档留在失败的那一份，权威围栏也只含它，旧地址因此打不开——重新点一次部署即可重来，引导是幂等的。

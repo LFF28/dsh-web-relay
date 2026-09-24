@@ -121,7 +121,7 @@ export interface DeploymentConfig {
   }
   /** 隧道。 */
   tunnel?: {
-    /** 引导与部署完成后是否维持隧道。 */
+    /** DSH 重启后是否自动恢复隧道。部署本身不看它：引导第 12 步总会建立隧道并验证转发。 */
     autoStart?: boolean
   }
   /**
