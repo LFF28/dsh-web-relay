@@ -109,7 +109,7 @@ Caddy 到 DSH 这一段是 loopback 上的明文 HTTP，Host 原样透传。**�
 | 作废全部 DSH 会话 | 删除 `$DSH_HOME/.credentials.yaml` 里的 `client-connection/browser-session` 记录并重启 profile | 全部旧 Cookie 校验失败，所有设备下次打开裸地址时由中继自动带回换票点 |
 | 收回隧道权限 | 从 `/etc/dsh-web-relay/authorized_keys` 删掉那一行并 `systemctl reload ssh` | 中继不再接受该反向转发 |
 
-重启 profile **不会**吊销 Cookie：签名密钥是复用的持久化凭据，重启后旧 Cookie 继续有效。
+重启 profile **不会**吊销 Cookie：签名密钥是复用的持久化凭据，重启后旧 Cookie 继续有效。重启也不会让公网入口重新可用——隧道只在一次部署（人工点击或随启动自动部署）里建立，开关关着或上次部署失败时，重启之后公网入口返回中继那行"隧道未连接"。
 
 Cookie 名是 `dsh-auth-` 拼接 `base64url(sha256(authority))`，所以换 `publicAuthority` 也会让旧 Cookie 立刻失效——这是一条设计内的副作用，变更权威时要预期到。
 
@@ -132,7 +132,7 @@ DSH 的客户端在非 loopback 页面上把设置持久化降级为内存（`pe
 
 ## 已知限制
 
-**目录选择器在远程会选到原生后端。** `directory-picker-auto` 的判定在 `bindHost !== '127.0.0.1'` 或 `facts.ssh` 成立时选 `browse`，否则可能选 `native`。本设计保持 loopback 绑定，因此远程请求目录选择时，原生选择器会在服务器那块屏幕上弹出。这是部署选择，插件不改这一行，而是在启动自检里检出并提示；要消掉它在部署时用 `directory-picker-browse` 覆盖 `directory-picker` 行。
+**目录选择器在远程会选到原生后端。** `directory-picker-auto` 的判定在 `bindHost !== '127.0.0.1'` 或 `facts.ssh` 成立时选 `browse`，否则可能选 `native`。本设计保持 loopback 绑定，因此远程请求目录选择时，原生选择器会在服务器那块屏幕上弹出。这是部署选择，插件不改这一行；要消掉它在部署时用 `directory-picker-browse` 覆盖 `directory-picker` 行。**插件不做检测**：启动自检只判权威，`src/` 里没有 `webServer.host` 或目录选择器那一路由的任何读取。
 
 **隧道断开对攻击者无信息。** 浏览器看到 Caddy 的 502 与一段"隧道未连接"的文案。内网侧的 harness 日志与 `status()` 记录连接次数与最近错误，见 [modules/operations.md](modules/operations.md)。
 

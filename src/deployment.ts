@@ -26,8 +26,8 @@ export interface Deployment {
   readonly gatewayPort: number
   /** 网关口令；为空表示尚未配置。 */
   readonly password: string
-  /** DSH 重启后是否自动恢复隧道。部署本身不看它。 */
-  readonly autoStart: boolean
+  /** 这次部署是否要求随 DSH 启动自动部署。 */
+  readonly autoDeploy: boolean
   /** 由 `host` 与 `gatewayPort` 推出的公网权威；`host` 为空或形状非法时为 undefined。 */
   readonly authority: string | undefined
   /** 权威里不带端口的主机名；Caddy 的 `default_sni` 需要它。 */
@@ -46,7 +46,7 @@ export function normalize(raw: DeploymentConfig): Deployment {
     hostKeyFingerprint: nonEmpty(raw.vps?.hostKeyFingerprint),
     gatewayPort,
     password: raw.gateway?.password ?? '',
-    autoStart: raw.tunnel?.autoStart ?? true,
+    autoDeploy: raw.deploy?.autoDeploy ?? false,
     authority: host === '' ? undefined : publicAuthority(host, gatewayPort),
     hostname: host === '' ? undefined : canonicalHostname(host),
   }

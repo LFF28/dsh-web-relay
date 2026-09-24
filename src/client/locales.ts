@@ -15,7 +15,7 @@ export type RelayLocaleKey =
   | 'vpsSection' | 'host' | 'hostHint' | 'sshPort' | 'user' | 'userHint'
   | 'identityFile' | 'identityFileHint' | 'hostKeyFingerprint' | 'hostKeyFingerprintHint'
   | 'gatewaySection' | 'gatewayPort' | 'gatewayPortHint' | 'password' | 'passwordHint'
-  | 'tunnelSection' | 'autoStart' | 'autoStartHint'
+  | 'startupSection' | 'autoDeploy' | 'autoDeployHint'
   | 'deploy' | 'deploying' | 'deployFailed' | 'deployHint' | 'incomplete' | 'refused' | 'discard' | 'loading'
   | 'statusSection' | 'stateUnconfigured' | 'stateBootstrapping' | 'stateReady' | 'stateFailed'
   | 'tunnelStopped' | 'tunnelStarting' | 'tunnelRunning' | 'tunnelBackingOff'
@@ -44,9 +44,9 @@ export const zh: Record<RelayLocaleKey, string> = {
   gatewayPortHint: '中继上唯一的 HTTP 端口，安全组需要放行它。',
   password: '网关口令',
   passwordHint: '必填，每次部署都要重填：口令不回传浏览器，页面从来没见过它。它只用于在中继上算出 bcrypt 哈希，明文不落中继磁盘。',
-  tunnelSection: '隧道',
-  autoStart: 'DSH 重启后自动恢复隧道',
-  autoStartHint: '只影响重启：DSH 一启动就把隧道重新拉起来。关掉后，每次重启都要在设置页重新点一次「部署」才会恢复。部署本身不看这个开关——引导第 12 步总会建立隧道并验证转发。',
+  startupSection: '启动',
+  autoDeploy: '随 DSH 启动自动部署',
+  autoDeployHint: '默认关闭。关掉时每次重启都要在本页点一次「部署」。打开它要这次部署成功才算数：成功后 DSH 一启动就自动重跑一遍完整部署，不需要再进来点。自动那一次失败只如实报错、停下，不重试。',
   deploy: '部署',
   deploying: '部署中…',
   deployFailed: '部署失败',
@@ -102,9 +102,9 @@ export const en: Record<RelayLocaleKey, string> = {
   gatewayPortHint: 'The relay\u2019s only HTTP port; the security group must allow it.',
   password: 'Gateway password',
   passwordHint: 'Required, and retyped on every deploy: the password never rides a response back to the browser, so this page has never seen it. It is only hashed on the relay; the plaintext never lands on the relay\u2019s disk.',
-  tunnelSection: 'Tunnel',
-  autoStart: 'Restore the tunnel on a DSH restart',
-  autoStartHint: 'This only affects restarts: DSH re-raises the tunnel as it starts. When off, every restart needs another Deploy from this page. A deploy itself ignores this switch — bootstrap step 12 always raises the tunnel and verifies forwarding.',
+  startupSection: 'Startup',
+  autoDeploy: 'Deploy automatically when DSH starts',
+  autoDeployHint: 'Off by default. When off, every DSH restart needs a Deploy from this page. Turning it on only counts once this deploy succeeds: after that, every start re-runs the full deploy on its own. A failing automatic run reports the failure and stops there — it never retries.',
   deploy: 'Deploy',
   deploying: 'Deploying…',
   deployFailed: 'Deploy failed',

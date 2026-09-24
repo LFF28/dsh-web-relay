@@ -54,9 +54,9 @@ dsh plugin --profile web add file:/path/to/dsh-web-relay
 
 **前提**：中继上你已经配好管理账号的公钥登录与免密 sudo。插件不配置中继的 SSH 认证，也不存管理口令，见 [configuration.md](configuration.md) 的"配置前的前提"。
 
-1. 把插件装进 profile，重启 `dsh web`。
+1. 把插件装进 profile，重启 `dsh web`。这次启动不会自动部署——「随 DSH 启动自动部署」默认关，记录里也还没有成功过的部署，所以要在设置页点一次「部署」。
 2. 在**服务器本机**用浏览器打开 `http://127.0.0.1:3080`。首次配置只能在这里做：DSH 的客户端在非 loopback 页面上把设置持久化降级为内存，远程页面写不了设置（见 [security.md](security.md)）。
-3. 打开 **设置 ▸ 远程访问**，填入中继地址、管理账号与网关口令，点「部署」。部署会把表单写进设置，并在中继上完整跑一遍引导。
+3. 打开 **设置 ▸ 远程访问**，填入中继地址、管理账号与网关口令，点「部署」。部署会把表单写进设置，并在中继上完整跑一遍引导；同页的「随 DSH 启动自动部署」开关要这次部署成功才算数，打开它之后每次启动 `dsh web` 都会自动重跑一遍完整部署。
 4. 这次部署自动完成：生成本机专用中继密钥 → 用管理账号登录中继 → 建受限中继用户与 `authorized_keys` → 安装并配置 Caddy → 为中继权威签发证书 → 把权威写进 DSH 的组合层（host trust）→ 拉起 SSH 反向隧道。终端上打印横幅，第一行是访问地址 `dsh-web-relay: https://<权威>/`，随后是中继 CA 指纹、中继主机密钥指纹与 Caddy 版本。引导第 10 步同时把中继上的 CA 根证书取回本机，存在 `$DSH_HOME/dsh-web-relay/ca/root.crt`。
 5. 把 `$DSH_HOME/dsh-web-relay/ca/root.crt` 送到手机上并安装：公网 HTTP 面上没有提供根证书的端点（换票点只换会话，不返回任何文件），所以这一步走本机复制、隔空投送或聊天软件，装之前先与横幅或设置页状态区里的 `caFingerprint` 核对。**唯一需要你决定的是装不装中继 CA**：装了就消除证书警告，不装则每次访问都要手动点过警告且失去身份验证，见 [security.md](security.md) 的"证书与 CA"一节。
 6. 手机用浏览器打开裸地址（`https://<权威>/`）并输入网关口令即可使用：中继会把这次访问在内部带到换票点，地址栏里不会出现 `/relay/enter`。
@@ -71,7 +71,7 @@ dsh plugin --profile web add file:/path/to/dsh-web-relay
 | [modules/plugin-bundle.md](modules/plugin-bundle.md) | 打包与分发：双半边结构、bundle patch、安装 / 卸载 / 升级 |
 | [modules/settings.md](modules/settings.md) | 设置命名空间与设置页：字段、口令存储、状态回显、部署怎么被触发 |
 | [modules/bootstrap.md](modules/bootstrap.md) | 引导：部署时用管理账号在中继上完成 sshd / Caddy / 证书配置（前提：公钥登录 + 免密 sudo） |
-| [modules/trust.md](modules/trust.md) | 权威注册与启动自检：把"手机 403"变成"启动即报错" |
+| [modules/trust.md](modules/trust.md) | 权威注册与自检：把"手机 403"变成"部署即报错" |
 | [modules/tunnel.md](modules/tunnel.md) | SSH 反向隧道守护：子进程、重连、释放、诊断 |
 | [modules/entry.md](modules/entry.md) | 裸地址入口与登录接续：不含秘密的访问地址、内部换票点 `/relay/enter`、CA 分发 |
 | [modules/relay-host.md](modules/relay-host.md) | 中继侧的生效形态：sshd 加固、Caddyfile、防火墙、验证清单 |

@@ -75,7 +75,7 @@ Host 半边（`lib/index.js`）暴露一个 `dsh-web-relay` 插件，内部按�
 | --- | --- |
 | `settings` | 注册两个命名空间，把用户字段规范化成一份 `Deployment`（地址、账号、路径） |
 | `bootstrap` | 幂等引导：登录中继、建受限用户、装 Caddy、发证书、取回 CA，见 [modules/bootstrap.md](modules/bootstrap.md) |
-| `trust` | 把 `publicAuthority` 变成围栏受信项（改权威时重解析 `connection` 行），并跑启动自检，见 [modules/trust.md](modules/trust.md) |
+| `trust` | 把 `publicAuthority` 变成围栏受信项（重解析 `connection` 行），并跑回环与公网自检，见 [modules/trust.md](modules/trust.md) |
 | `tunnel` | 转发前预检（清掉上一轮残留的监听端点）、SSH 反向转发子进程的生命周期、退避、健康判定、拆除，见 [modules/tunnel.md](modules/tunnel.md) |
 | `entry` | `/relay/enter` 一条精确路由（换票点）：只把启动令牌换成 DSH Cookie；中继把裸地址上的文档导航在内部改写到它，见 [modules/entry.md](modules/entry.md) |
 
@@ -96,7 +96,7 @@ Client 半边（`lib/client.js`）只做一件事：向 `settings.section` 注�
 1. `web-relay` 行 `apply`：读 `ctx.webServer.port` 得到本机端口，注册 `/relay/enter` 一条精确路由（`entry.enabled` 为假时它回 `403`，路由本身仍在），同步 `provide` `webRelay`。
 2. 行级注入 `['settings', 'subprocess', 'webServer']` 满足后 `apply` 继续，注册两个命名空间。settings 已在更早的基础层行里就绪，因此**已知的权威在第一次解析 `connection` 行时就可用了**。
 3. `connection` 行按注入出现而激活，围栏拿到权威列表。
-4. 启动只做恢复：读一次设置与记录，把当前权威注册进围栏并跑一次回环自检；记录说 `ready`、权威与当前配置一致且 `autoStart` 为真时重新拉起隧道。**重启不引导**。
+4. 启动：把当前权威注册进围栏，然后按设置决定动不动手——记录里上次部署成功且「随 DSH 启动自动部署」打开时，自动跑一遍完整部署（含引导与隧道）；否则什么都不做，只补一次回环自检打一行结论。**失败不重试。**
 5. 用户在设置页点部署（或手工改设置文档）时，插件按 [modules/bootstrap.md](modules/bootstrap.md) 的顺序完整跑一遍引导并拉起隧道；权威变化时 `trust` 重解析 `connection` 行，围栏在数毫秒内接受新权威。
 
 ## 不变量

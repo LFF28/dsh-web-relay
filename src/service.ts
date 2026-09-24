@@ -173,10 +173,11 @@ export class RelayRuntime {
   }
 
   /**
-   * 启动：建目录、备好会话密钥、读一次记录恢复内存状态，然后只做恢复。
+   * 启动：建目录、备好会话密钥、读一次记录恢复内存状态，然后注册围栏、按设置
+   * 决定要不要自动部署。
    *
-   * 必须在 `apply` 里同步完成目录准备与路由注册，因此这里只把耗时的恢复留成后台
-   * 任务——`connection` 行不依赖恢复结果，它只依赖服务面已经 provide。
+   * 必须在 `apply` 里同步完成目录准备与路由注册，因此这里只把耗时的动作留成后台
+   * 任务——`connection` 行不依赖它，它只依赖服务面已经 provide。
    */
   async start(): Promise<void> {
     await mkdir(sshDir(), { recursive: true, mode: 0o700 })
@@ -190,41 +191,36 @@ export class RelayRuntime {
   }
 
   /**
-   * 恢复：读一次设置与记录，把权威注册进围栏，并在记录说"中继上已经配好"时把
-   * 隧道重新拉起来。
+   * 启动：把当前权威注册进围栏，并在设置要求时自动跑一次部署。
    *
-   * 它不引导。隧道是一条活的连接，不随进程重启存活，而中继上的东西还在，所以
-   * "重启 DSH"与"重新配置中继"是两件事：前者只把服务带回记录描述的样子。
-   * @returns 落定于恢复动作结束。
+   * 只有"上次部署成功"与"这次部署要求随启动自动部署"同时成立才动手：失败的部署会
+   * 把记录写成 `failed`，这个开关因此自动失效，不需要第二个字段记账。一次启动只
+   * 尝试一次——引导失败就停在失败上，不重试。
+   *
+   * 不动手时补一次回环自检：权威必须已经在围栏里，否则这台机器配好了也会 403，而
+   * 那行结论是"手机为什么打不开"的第一手信息。自动部署那条路不需要它——部署第 11
+   * 步本来就要做一次同样的自检。
+   * @returns 落定于本次启动动作结束。
    */
   async #restore(): Promise<void> {
     const deployment = this.#settings.deployment()
     this.#trust.apply()
-    if (deployment.authority !== undefined) {
-      const check = await this.#trust.selfCheck(
-        deployment.authority, this.deps.webServer.port, this.deps.config.probeTimeoutMs,
-      )
-      this.deps.logger[check.ok ? 'info' : 'warn']('%s %s', this.deps.config.logLabel, check.detail)
-    }
-
-    if (!isRunnable(deployment)) {
-      await this.#tunnel.stop()
-      this.#state = 'unconfigured'
-      const record = this.#settings.record()
-      if (record.state !== 'unconfigured' || record.publicAuthority !== '') {
-        await this.#settings.patchRecord({
-          state: 'unconfigured', publicAuthority: '', updatedAt: new Date().toISOString(),
-        })
+    if (this.#settings.record().state === 'ready' && deployment.autoDeploy) {
+      this.deps.logger.info('%s 已打开随启动自动部署，开始自动部署', this.deps.config.logLabel)
+      try {
+        await this.#deploy()
+      } catch (error) {
+        // 引导自己把失败写进记录并返回，能走到这里的只有记录写入一类的意外。报出来，
+        // 但绝不重试——下一次动手要么是重启，要么是用户在设置页点一次部署。
+        this.deps.logger.error('%s 自动部署中断：%s', this.deps.config.logLabel, describeError(error))
       }
       return
     }
-
-    const record = this.#settings.record()
-    if (record.state !== 'ready' || record.publicAuthority !== deployment.authority) return
-    // 这个开关只在这里生效：重启后要不要把隧道接回来。部署不看它——引导第 12 步总会
-    // 建立隧道并等它健康，那一步同时是"转发确实通了"的验证。
-    if (deployment.autoStart) await this.#tunnel.start(deployment)
-    else await this.#tunnel.stop()
+    if (deployment.authority === undefined) return
+    const check = await this.#trust.selfCheck(
+      deployment.authority, this.deps.webServer.port, this.deps.config.probeTimeoutMs,
+    )
+    this.deps.logger[check.ok ? 'info' : 'warn']('%s %s', this.deps.config.logLabel, check.detail)
   }
 
   /**

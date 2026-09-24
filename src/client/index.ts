@@ -111,9 +111,9 @@ function createFace(
     useRelay: <T>(select: (view: RelayView) => T): T => select(useSyncExternalStore(subscribe, read)),
     deploy: async (draft: RelayDraft): Promise<boolean> => {
       const current = deploymentScope.getSnapshot().value
-      const request = typeof current?.bootstrapRequest === 'number' ? current.bootstrapRequest : 0
+      const request = typeof current?.deploy?.request === 'number' ? current.deploy.request : 0
       await deploymentScope.mutate(operations(draft, request + 1))
-      return deploymentScope.getSnapshot().value?.bootstrapRequest === request + 1
+      return deploymentScope.getSnapshot().value?.deploy?.request === request + 1
     },
   }
 }
@@ -125,14 +125,14 @@ function createFace(
  * 从来就没到过浏览器。一组操作共享同一次修订栅栏、同一次校验与同一次落盘，所以
  * `vps.host` 的跨字段约束与"口令非空"的约束都成立，也不会落下中途被拒的中间态。
  *
- * `bootstrapRequest` 与表单值在这一次写入里一起提交：设置服务对解析后的值做深层
- * 相等短路，只改计数也足以让这次提交成为一次真实变更，于是"什么都没改也要重来
- * 一遍"与"改了字段"走的是同一条路。
+ * `deploy` 一段与表单值在这一次写入里一起提交：设置服务对解析后的值做深层相等
+ * 短路，只改计数也足以让这次提交成为一次真实变更，于是"什么都没改也要重来一遍"
+ * 与"改了字段"走的是同一条路。
  * @param draft - 表单里的值。
- * @param bootstrapRequest - 本次部署的计数。
+ * @param request - 本次部署的请求计数。
  * @returns 操作列表。
  */
-function operations(draft: RelayDraft, bootstrapRequest: number): SettingsPathOperation[] {
+function operations(draft: RelayDraft, request: number): SettingsPathOperation[] {
   return [
     { op: 'set', path: ['vps', 'host'], value: draft.host.trim() },
     { op: 'set', path: ['vps', 'port'], value: port(draft.sshPort, 22) },
@@ -141,8 +141,8 @@ function operations(draft: RelayDraft, bootstrapRequest: number): SettingsPathOp
     { op: 'set', path: ['vps', 'hostKeyFingerprint'], value: draft.hostKeyFingerprint.trim() },
     { op: 'set', path: ['gateway', 'port'], value: port(draft.gatewayPort, 8443) },
     { op: 'set', path: ['gateway', 'password'], value: draft.password },
-    { op: 'set', path: ['tunnel', 'autoStart'], value: draft.autoStart },
-    { op: 'set', path: ['bootstrapRequest'], value: bootstrapRequest },
+    { op: 'set', path: ['deploy', 'request'], value: request },
+    { op: 'set', path: ['deploy', 'autoDeploy'], value: draft.autoDeploy },
   ]
 }
 

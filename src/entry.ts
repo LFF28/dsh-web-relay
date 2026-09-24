@@ -102,7 +102,7 @@ async function handleEnter(
   const authority = deps.authority()
   if (authority === '') {
     res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
-    res.end('dsh-web-relay: 还没有配置中继地址，请先在本机的「Web Relay」卡片里填好并保存\n')
+    res.end('dsh-web-relay: 还没有配置中继地址，请先在本机的 设置 ▸ 远程访问 里填好并点一次部署\n')
     return
   }
   if (connection === undefined) {

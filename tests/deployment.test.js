@@ -17,7 +17,7 @@ function raw(overrides = {}) {
   return {
     vps: { host: '', port: 22, user: 'root', identityFile: '', hostKeyFingerprint: '' },
     gateway: { port: 8443, password: '' },
-    tunnel: { autoStart: true },
+    deploy: { request: 0, autoDeploy: false },
     ...overrides,
   }
 }
@@ -34,6 +34,11 @@ test('normalize 对非法的 vps.host 给出 undefined 权威而不是猜一个'
   const deployment = normalize(raw({ vps: { host: 'user@1.2.3.4' }, gateway: { password: 'p' } }))
   assert.equal(deployment.authority, undefined)
   assert.equal(deployment.hostname, undefined)
+})
+
+test('normalize 把随启动自动部署收成布尔值，默认关', () => {
+  assert.equal(normalize(raw()).autoDeploy, false)
+  assert.equal(normalize(raw({ deploy: { request: 3, autoDeploy: true } })).autoDeploy, true)
 })
 
 test('isRunnable 只要求地址与口令', () => {

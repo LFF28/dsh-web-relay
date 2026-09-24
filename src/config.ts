@@ -46,9 +46,9 @@ export interface RelayConfig {
     /** 关掉后 `/relay/enter` 只回一段说明；中继侧的改写与跳转不变。 */
     enabled?: boolean
   }
-  /** 启动自检。 */
+  /** 部署后的自检。 */
   selfCheck?: {
-    /** 引导结束后是否真的去请求一次公网权威。 */
+    /** 部署结束后是否真的去请求一次公网权威。 */
     publicProbe?: boolean
     /** 自检请求超时。 */
     probeTimeoutMs?: number
@@ -82,7 +82,7 @@ const EntryConfigSchema: z<NonNullable<RelayConfig['entry']>> = z.object({
   enabled: z.boolean().default(true),
 })
 
-/** 启动自检那一段的 schema。 */
+/** 部署后的自检那一段的 schema。 */
 const SelfCheckConfigSchema: z<NonNullable<RelayConfig['selfCheck']>> = z.object({
   publicProbe: z.boolean().default(true),
   probeTimeoutMs: z.natural().min(1).default(5000),
@@ -97,7 +97,7 @@ export const Config: z<RelayConfig> = z.object({
   selfCheck: SelfCheckConfigSchema.default({}),
 })
 
-/** 用户在设置卡片里填的部署参数。 */
+/** 用户在设置页里填的部署参数。 */
 export interface DeploymentConfig {
   /** 中继主机。 */
   vps?: {
@@ -119,19 +119,24 @@ export interface DeploymentConfig {
     /** 网关口令。必填，每次部署都要重填——它的值不回传浏览器。只交给中继上 `caddy hash-password` 的 stdin，明文不落中继的磁盘。 */
     password?: string
   }
-  /** 隧道。 */
-  tunnel?: {
-    /** DSH 重启后是否自动恢复隧道。部署本身不看它：引导第 12 步总会建立隧道并验证转发。 */
-    autoStart?: boolean
+  /** 部署请求：用户点一次部署就把这两个值一起写下来。 */
+  deploy?: {
+    /**
+     * 部署请求计数：每次点部署加一。
+     *
+     * 它存在的唯一理由是设置服务对解析后的值做深层相等短路：写入与现值相同时既不
+     * 通知观察者也不推进修订号。没有它，"中继侧被手工改过、表单一个字没动、再点
+     * 一次部署"会静默什么都不做。
+     */
+    request?: number
+    /**
+     * 这次部署是否要求随 DSH 启动自动部署。
+     *
+     * 它只是请求。真正决定启动时动不动手的是"记录里上次部署的结果是不是成功"：
+     * 失败的部署会把记录写成 `failed`，这个开关因此自动失效，不需要第二个字段记账。
+     */
+    autoDeploy?: boolean
   }
-  /**
-   * 部署请求计数。用户在设置页点一次部署就加一。
-   *
-   * 它存在的唯一理由是设置服务对解析后的值做深层相等短路：写入与现值相同时既不
-   * 通知观察者也不推进修订号。没有它，"中继侧被手工改过、表单一个字没动、再点
-   * 一次部署"会静默什么都不做。
-   */
-  bootstrapRequest?: number
 }
 
 /** {@link DeploymentConfig} 的 schema。 */
@@ -150,17 +155,17 @@ const GatewaySchema: z<NonNullable<DeploymentConfig['gateway']>> = z.object({
   password: z.string().role('secret').default(''),
 })
 
-/** 部署侧隧道开关的 schema。 */
-const DeploymentTunnelSchema: z<NonNullable<DeploymentConfig['tunnel']>> = z.object({
-  autoStart: z.boolean().default(true),
+/** 部署请求那一段的 schema。 */
+const DeployRequestSchema: z<NonNullable<DeploymentConfig['deploy']>> = z.object({
+  request: z.natural().default(0),
+  autoDeploy: z.boolean().default(false),
 })
 
 /** {@link DeploymentConfig} 的 schema。 */
 export const Deployment: z<DeploymentConfig> = z.object({
   vps: VpsSchema.default({}),
   gateway: GatewaySchema.default({}),
-  tunnel: DeploymentTunnelSchema.default({}),
-  bootstrapRequest: z.natural().default(0),
+  deploy: DeployRequestSchema.default({}),
 })
 
 /** 引导一步的结果。 */
@@ -175,7 +180,7 @@ export interface BootstrapStep {
   detail: string
 }
 
-/** 插件写给卡片看的运行记录。 */
+/** 插件写给设置页看的运行记录。 */
 export interface RecordConfig {
   /** 引导与隧道的合并状态。 */
   state?: 'unconfigured' | 'bootstrapping' | 'ready' | 'failed'
@@ -285,7 +290,7 @@ export interface ResolvedRelayConfig {
   readonly connectTimeoutSec: number
   /** `/relay/enter` 是否答一套会话，还是只回"入口已关闭"。 */
   readonly entryEnabled: boolean
-  /** 引导结束后是否真的去请求一次公网权威。 */
+  /** 部署结束后是否真的去请求一次公网权威。 */
   readonly publicProbe: boolean
   /** 自检请求超时。 */
   readonly probeTimeoutMs: number

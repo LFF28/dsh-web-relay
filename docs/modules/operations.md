@@ -55,8 +55,8 @@
 | 操作 | 位置 |
 | --- | --- |
 | 改部署参数（地址、账号、网关口令） | 本机页面 ▸ 设置 ▸ 远程访问 ▸ 部署 |
-| 重新部署（重跑引导、重新拉起隧道） | 同上，点「部署」 |
-| 作废全部 DSH 会话 Cookie | 本机，删 `$DSH_HOME/.credentials.yaml` 里的 `client-connection/browser-session` 记录后重启 profile |
+| 重新部署（重跑一遍完整引导） | 同上，点「部署」 |
+| 作废全部 DSH 会话 Cookie | 本机，删 `$DSH_HOME/.credentials.yaml` 里的 `client-connection/browser-session` 记录后重启 profile，再点一次部署把隧道接回来（开着「随 DSH 启动自动部署」时这一步由启动自动完成） |
 | 改权限的**默认**预设、模型与模型设置、导入导出设置 | 本机，本地浏览器打开 `dsh web` |
 | 中继侧的任何手工改动 | SSH 到中继主机 |
 
@@ -88,9 +88,10 @@ caddy reload --config /etc/caddy/Caddyfile
 # 内网主机，先停掉 dsh web
 # 编辑 $DSH_HOME/.credentials.yaml，删除 client-connection/browser-session 这条记录
 # 重新启动 dsh web --profile web
+# 再回设置 ▸ 远程访问点一次「部署」，把隧道接回来（开着自动部署时启动已替你做了一次）
 ```
 
-重启本身**不足以**作废 Cookie——签名密钥是持久化的凭据记录，只有删掉它才会轮换。所有设备下次打开裸地址时会被中继送进换票点，因此不需要人工做任何事。
+重启本身**不足以**作废 Cookie——签名密钥是持久化的凭据记录，只有删掉它才会轮换。重启也不会把隧道接回来：隧道只在一次部署里建立，所以按上面的步骤重启之后还要再点一次部署（开关开着时由启动的那次自动部署完成），公网入口才重新可用；那之后所有设备打开裸地址都会被中继送进换票点。
 
 ### 轮换中继的隧道公钥
 

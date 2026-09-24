@@ -117,16 +117,16 @@ function RelayForm(props: { t: Translate; face: RelayFace; view: RelayView }) {
         </Field>
       </Section>
 
-      <Section title={t('tunnelSection')}>
+      <Section title={t('startupSection')}>
         <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Switch
-            checked={current.autoStart}
+            checked={current.autoDeploy}
             disabled={!view.writable}
-            label={t('autoStart')}
-            onChange={(checked) => { edit('autoStart', checked) }}
+            label={t('autoDeploy')}
+            onChange={(checked) => { edit('autoDeploy', checked) }}
           />
         </label>
-        <p style={{ margin: 0, opacity: 0.72 }}>{t('autoStartHint')}</p>
+        <p style={{ margin: 0, opacity: 0.72 }}>{t('autoDeployHint')}</p>
       </Section>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -286,6 +286,6 @@ function draftOf(view: RelayView): RelayDraft {
     hostKeyFingerprint: value?.vps?.hostKeyFingerprint ?? '',
     gatewayPort: String(value?.gateway?.port ?? 8443),
     password: '',
-    autoStart: value?.tunnel?.autoStart ?? true,
+    autoDeploy: value?.deploy?.autoDeploy ?? false,
   }
 }

@@ -57,7 +57,7 @@ export interface TunnelDeps {
  *
  * 状态机的三档对应三件不同的事：`starting` 是第一次连接，`backing-off` 是失败后的
  * 等待，`running` 是连接已经活了超过 `healthyAfterMs`。分开它们的理由是可诊断性——
- * 卡片上显示「正在重试（第 3 次）」比显示「未连接」有用得多。
+ * 设置页上显示「正在重试（第 3 次）」比显示「未连接」有用得多。
  */
 export class Tunnel {
   /** 每次 `start` 递增；循环用它判断自己是否已经被取代。 */
@@ -215,7 +215,7 @@ export class Tunnel {
     try {
       // 等「进程范围空了」而不是只等 `done`。`done` 报的是命令自己的退出事实；真正
       // 决定中继侧端点有没有释放的是进程还在不在。只等 `done` 时一条不落定的 `done`
-      // 会让循环永远停在 `running`——端口上什么都没有，卡片却显示已连接。
+      // 会让循环永远停在 `running`——端口上什么都没有，设置页却显示已连接。
       const exited = await Promise.race([
         handle.done.then(outcome => ({ outcome })),
         handle.waitForExit().then(() => ({ outcome: undefined }), () => ({ outcome: undefined })),

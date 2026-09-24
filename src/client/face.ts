@@ -63,8 +63,8 @@ export interface RelayDraft {
   readonly gatewayPort: string
   /** 网关口令。必填：它是 `role('secret')` 字段，从来不回传浏览器，所以每次部署都要重填。 */
   readonly password: string
-  /** DSH 重启后是否自动恢复隧道。 */
-  readonly autoStart: boolean
+  /** 这次部署是否要求随 DSH 启动自动部署。 */
+  readonly autoDeploy: boolean
 }
 
 /** 设置快照在页面里用到的部分。 */
@@ -92,13 +92,17 @@ export interface RelayDeploymentView {
     /** 网关端口。 */
     readonly port?: number
   }
-  /** `tunnel` 一节。 */
-  readonly tunnel?: {
-    /** DSH 重启后是否自动恢复隧道。 */
-    readonly autoStart?: boolean
+  /**
+   * 部署请求：点一次部署就把这两个值一起写下来。
+   *
+   * `request` 是部署计数，`autoDeploy` 是"这次部署是否要求随 DSH 启动自动部署"。
+   */
+  readonly deploy?: {
+    /** 单调递增的部署请求计数；点一次部署加一。 */
+    readonly request?: number
+    /** 这次部署是否要求随 DSH 启动自动部署。 */
+    readonly autoDeploy?: boolean
   }
-  /** 单调递增的部署请求计数；点一次部署加一。 */
-  readonly bootstrapRequest?: number
 }
 
 /** 一次渲染用到的完整快照。 */

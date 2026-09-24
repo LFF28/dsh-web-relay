@@ -14,7 +14,7 @@ dsh-web-relay/
 │   ├── authority.ts      # 权威规范化助手，见 modules/trust.md
 │   ├── settings.ts       # 两个设置命名空间，见 modules/settings.md
 │   ├── bootstrap.ts      # 自动引导，见 modules/bootstrap.md
-│   ├── trust.ts          # 权威注册与启动自检，见 modules/trust.md
+│   ├── trust.ts          # 权威注册与自检，见 modules/trust.md
 │   ├── tunnel.ts         # SSH 反向隧道守护，见 modules/tunnel.md
 │   ├── entry.ts          # 换票点 /relay/enter，见 modules/entry.md
 │   └── client/           # 浏览器半边：设置菜单里的「远程访问」页
@@ -151,15 +151,15 @@ export interface WebRelayHandle {
 
 ## 加载与生效顺序
 
-`apply` 同步完成前面几步，后面的动作由设置提交与启动恢复触发：
+`apply` 同步完成前面几步，后面的动作由设置提交与启动触发：
 
-1. 读 `ctx.webServer.port` 与 `ctx.webServer.host`：前者是隧道目标端口，后者用于启动自检判断"是否只绑在 loopback"。
+1. 读 `ctx.webServer.port`：它就是隧道目标端口，也就是中继上那个反向转发端点的落点。
 2. 注册两个设置命名空间并拿到读写门面。settings 是行级注入的一部分，在更早的基础层行里就绪，这一步同步完成。
 3. 同步 `provide('webRelay', ...)`。服务面的两个取值器都从设置里现取，因此**已保存的权威在 `connection` 行第一次解析时就可用了**；未配置时 `authority()` 返回空字符串、`trustedHosts` 是空数组。
 4. 注册 `/relay/enter` 一条精确路由（换票点；`entry.enabled` 为假时它回 `403` 说明，路由仍在）。
-5. `start()`：备好会话密钥、读一次记录恢复内存状态、挂上设置观察者，然后异步做一次恢复。
+5. `start()`：备好会话密钥、读一次记录恢复内存状态、挂上设置观察者，然后异步把当前权威注册进围栏，并按设置决定要不要自动部署。
 6. settings 每次提交都触发一次完整引导（第 0–13 步），其中包含重算权威与重解析 `connection` 行（见上）；宿主不做差异判断。
-7. 启动 profile 不引导：恢复只读一次设置与记录、把权威注册进围栏，并在记录为 `ready`、权威一致且 `tunnel.autoStart` 为真时重新拉起隧道；`Deployment` 不齐全时停隧道并把记录写成等待配置。
+7. 启动 profile 只把权威注册进围栏，然后按设置决定动不动手：记录为 `ready` 且 `deploy.autoDeploy` 为真时自动跑一次完整部署（与点部署完全一样，一次启动最多一次，失败不重试）；否则不部署、不起隧道，只补一次回环自检。`Deployment` 不齐全时同样不部署、不起隧道。
 
 第 3 步的 `provide` 必须早于 `connection` 行解析配置，且不依赖第 5、6、7 步。整个 `apply` 不做任何自包含的失败校验：地址、口令、路径都来自 settings 且可能是空的，把校验放在这里只会让填错地址的 profile 起不来。可失败的动作全部落在引导步骤里，以文本呈现，见 [bootstrap.md](bootstrap.md)。
 
