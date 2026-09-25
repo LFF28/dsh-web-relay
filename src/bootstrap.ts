@@ -106,6 +106,8 @@ export interface BootstrapOutcome {
   readonly environment?: RemoteEnvironment
   /** 第 10 步取回的根证书指纹。 */
   readonly caFingerprint: string
+  /** 第 10 步取回的根证书 PEM 全文，供设置页下载；未走到第 10 步时为空串。 */
+  readonly caPem: string
   /** 第 2 步观察到（或核对通过）的中继主机公钥指纹。 */
   readonly hostKeyFingerprint: string
   /** 第 7 步实际安装到的 Caddy 版本，用于记录。 */
@@ -213,6 +215,7 @@ export class Bootstrap {
    */
   async run(deployment: Deployment, log: StepLog, signal: AbortSignal): Promise<BootstrapOutcome> {
     let caFingerprint = ''
+    let caPem = ''
     this.#hostKeyFingerprint = ''
     try {
       await this.#stepLocalTools(log)
@@ -225,12 +228,15 @@ export class Bootstrap {
       await this.#stepPackages(deployment, log, signal)
       const hash = await this.#stepGatewayHash(deployment, log, signal)
       await this.#stepCaddyfile(deployment, log, signal, hash)
-      caFingerprint = await this.#stepCaCert(deployment, log, signal)
+      const ca = await this.#stepCaCert(deployment, log, signal)
+      caFingerprint = ca.fingerprint
+      caPem = ca.pem
       log.skipAfter('10', '等待后续步骤')
       return {
         ok: true,
         environment: this.#env,
         caFingerprint,
+        caPem,
         hostKeyFingerprint: this.#hostKeyFingerprint,
         caddyVersion: this.#caddyVersion,
       }
@@ -242,6 +248,7 @@ export class Bootstrap {
         error: message,
         environment: this.#env,
         caFingerprint,
+        caPem,
         hostKeyFingerprint: this.#hostKeyFingerprint,
         caddyVersion: this.#caddyVersion,
       }
@@ -565,32 +572,45 @@ export class Bootstrap {
     }
   }
 
-  /** 第 10 步：取回 CA 根证书并算指纹。 */
-  async #stepCaCert(deployment: Deployment, log: StepLog, signal: AbortSignal): Promise<string> {
+  /**
+   * 第 10 步：取回 CA 根证书并算指纹。
+   * @param deployment - 部署参数。
+   * @param log - 步骤记录器。
+   * @param signal - 取消信号。
+   * @returns 证书的 `SHA256:…` 指纹与 PEM 全文。
+   */
+  async #stepCaCert(
+    deployment: Deployment,
+    log: StepLog,
+    signal: AbortSignal,
+  ): Promise<{ fingerprint: string; pem: string }> {
     const result = await this.#remote(deployment, caCertScript(deployment), {
       signal, privileged: true, timeoutMs: this.deps.stepTimeoutMs,
     })
-    const pem = result.stdout
-    if (result.exitCode !== 0 || !pem.includes('BEGIN CERTIFICATE')) {
+    const certText = result.stdout.trim()
+    if (result.exitCode !== 0 || !certText.includes('BEGIN CERTIFICATE')) {
       const detail = `读不到 CA 根证书：${firstLine(result.stderr) || '输出里没有 PEM 块'}`
       log.add('10', 'failed', detail)
       throw new StepFailure(detail)
     }
+    // 这一份同时用于落盘与记录里的 `caPem`，两者必须逐字相同：下载到的文件要能
+    // 直接安装，所以把 `ssh` 那一路可能带上的首尾空白收干净、补一个结尾换行。
+    const pem = `${certText}\n`
     await mkdir(dirname(this.deps.caCertPath), { recursive: true, mode: 0o755 })
     const staged = `${this.deps.caCertPath}.staged`
-    await writeFile(staged, pem.endsWith('\n') ? pem : `${pem}\n`, { mode: 0o644 })
+    await writeFile(staged, pem, { mode: 0o644 })
     await rename(staged, this.deps.caCertPath)
-    const printed = await runLocal(this.deps, [
+    const fingerprintResult = await runLocal(this.deps, [
       this.#tool('openssl'), 'x509', '-noout', '-fingerprint', '-sha256', '-in', this.deps.caCertPath,
     ])
-    const fingerprint = (printed.stdout.match(/Fingerprint=(\S+)/)?.[1] ?? '').trim()
+    const fingerprint = (fingerprintResult.stdout.match(/Fingerprint=(\S+)/)?.[1] ?? '').trim()
     if (fingerprint === '') {
-      const detail = `根证书已取回，但算不出指纹：${firstLine(printed.stderr)}`
+      const detail = `根证书已取回，但算不出指纹：${firstLine(fingerprintResult.stderr)}`
       log.add('10', 'failed', detail)
       throw new StepFailure(detail)
     }
     log.add('10', 'ok', `根证书已保存到 ${this.deps.caCertPath}，SHA256 指纹 ${fingerprint}`)
-    return fingerprint
+    return { fingerprint, pem }
   }
 
   /** 管理连接的身份。 */

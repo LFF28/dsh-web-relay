@@ -192,6 +192,14 @@ export interface RecordConfig {
   observedHostKeyFingerprint?: string
   /** 中继 CA 根证书的 `SHA256:…` 指纹。 */
   caFingerprint?: string
+  /**
+   * 中继 CA 根证书的 PEM 全文，供设置页存成本地文件。
+   *
+   * 它只有公钥材料，本来就要装到设备上，所以刻意**不**声明 `role('secret')`：要
+   * 原样骑到 describe 响应上，设置页才有东西可下载。约 810 字节 base64。读取它的
+   * 页面前提是已经过了网关口令与 DSH 认证，而且这个标签页只在 loopback 上注册。
+   */
+  caPem?: string
   /** 网关。 */
   gateway?: {
     /** 网关会话 Cookie 的比对值；`gateway.password` 每次变化时重新生成。 */
@@ -231,6 +239,7 @@ export const Record: z<RecordConfig> = z.object({
   publicAuthority: z.string().default(''),
   observedHostKeyFingerprint: z.string().default(''),
   caFingerprint: z.string().default(''),
+  caPem: z.string().default(''),
   gateway: RecordGatewaySchema.default({}),
   steps: z.array(z.object({
     id: z.string().required(),

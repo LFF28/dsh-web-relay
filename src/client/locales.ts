@@ -19,7 +19,7 @@ export type RelayLocaleKey =
   | 'deploy' | 'deploying' | 'deployFailed' | 'deployHint' | 'incomplete' | 'refused' | 'discard' | 'loading'
   | 'statusSection' | 'stateUnconfigured' | 'stateBootstrapping' | 'stateReady' | 'stateFailed'
   | 'tunnelStopped' | 'tunnelStarting' | 'tunnelRunning' | 'tunnelBackingOff'
-  | 'authority' | 'entryUrl' | 'caFingerprint' | 'hostKeyObserved'
+  | 'authority' | 'entryUrl' | 'caFingerprint' | 'hostKeyObserved' | 'downloadCa'
   | 'lastPreflight' | 'preflightFree' | 'preflightReleased' | 'preflightSkipped' | 'preflightRefused'
   | 'steps' | 'stepOk' | 'stepFailed' | 'stepSkipped' | 'lastError'
   | 'empty' | 'readOnly'
@@ -68,6 +68,7 @@ export const zh: Record<RelayLocaleKey, string> = {
   entryUrl: '访问地址',
   caFingerprint: '根证书指纹',
   hostKeyObserved: '中继主机密钥',
+  downloadCa: '下载根证书',
   lastPreflight: '转发前预检',
   preflightFree: '端口空闲',
   preflightReleased: '清掉了残留监听',
@@ -126,6 +127,7 @@ export const en: Record<RelayLocaleKey, string> = {
   entryUrl: 'URL',
   caFingerprint: 'Root fingerprint',
   hostKeyObserved: 'Relay host key',
+  downloadCa: 'Download the root certificate',
   lastPreflight: 'Pre-connect preflight',
   preflightFree: 'Port free',
   preflightReleased: 'Released a stale listener',

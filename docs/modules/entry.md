@@ -34,7 +34,7 @@ GET /relay/enter     # 换票点，公网 HTTP 面上唯一属于插件的路由
 
 `ctx.connection` 通过 `ctx.inject(['connection'], (c) => ...)` 获取，不放进顶层 `inject`（那会与 `connection` 行注入 `webRelay` 形成等待环），与 `@deepseek-ai/dsh-client-connection` 自己用 `ctx.inject(['webServer'], ...)` 的写法一致。
 
-公网 HTTP 面上只有这一条路由，根证书不经过它。根证书由 Caddy 在中继上生成，由引导第 10 步用 ssh 取到 `$DSH_HOME/dsh-web-relay/ca/root.crt`（`0644`），再经本地复制、AirDrop、聊天软件等不依赖 TLS 信任的渠道送到设备。第一台设备因此不能靠"信任一个自己还不信任的 TLS 端点"取到根证书——这一点现在是结构性的：不存在任何提供根证书的 HTTP 端点。实测（不带 `Accept: text/html`）`https://<publicAuthority>/relay/ca.crt` 不带凭据时是 `401`，带上网关口令（或带 DSH 会话）时是 `404`；即便用浏览器打开它，中继也会把这次文档导航带进换票点，拿到的是一份会话而不是文件。设备装好后用记录的 `caFingerprint` 核对指纹，可与中继上 `data/pki/authorities/dsh-relay/root.crt` 逐字比对。
+公网 HTTP 面上只有这一条路由，根证书不经过它。根证书由 Caddy 在中继上生成，由引导第 10 步用 ssh 取到 `$DSH_HOME/dsh-web-relay/ca/root.crt`（`0644`）；要在本机把它存成本地文件，用设置 ▸ 远程访问 状态区的「下载根证书」（那份 PEM 就存在 `web-relay-record` 的 `caPem` 里，页面自己拼下载，也不经过任何端点），再经本机复制、AirDrop、聊天软件等不依赖 TLS 信任的渠道送到设备。第一台设备因此不能靠"信任一个自己还不信任的 TLS 端点"取到根证书——这一点是结构性的：不存在任何提供根证书的 HTTP 端点。实测（不带 `Accept: text/html`）`https://<publicAuthority>/relay/ca.crt` 不带凭据时是 `401`，带上网关口令（或带 DSH 会话）时是 `404`；即便用浏览器打开它，中继也会把这次文档导航带进换票点，拿到的是一份会话而不是文件。设备装好后用记录的 `caFingerprint` 核对指纹，可与中继上 `data/pki/authorities/dsh-relay/root.crt` 逐字比对。
 
 ## 裸地址如何自动带路
 

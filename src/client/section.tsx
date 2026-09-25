@@ -206,6 +206,11 @@ function Status(props: { t: Translate; view: RelayView }) {
           </div>
         ))}
       </dl>
+      {record.caPem !== undefined && record.caPem !== '' && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <Button variant="ghost" onClick={() => { downloadCaCert(record.caPem ?? '') }}>{t('downloadCa')}</Button>
+        </div>
+      )}
       {view.steps.length > 0 && (
         <details>
           <summary>{t('steps')}</summary>
@@ -252,6 +257,23 @@ function tunnelWord(tunnel: RelayView['tunnel'], t: Translate): string {
     case 'backing-off': return t('tunnelBackingOff')
     default: return t('tunnelStopped')
   }
+}
+
+/**
+ * 把根证书交给浏览器存成本地文件。
+ *
+ * 走 `Blob` + 一个临时对象 URL，因此不需要任何宿主端点：证书本来就在这份记录里，
+ * 页面拿它拼一个下载即可。文件名固定，扩展名用 `.crt`——桌面系统按它关联到证书
+ * 查看器，手机上则是"是否安装此描述文件"。
+ * @param pem - 根证书 PEM 全文。
+ */
+function downloadCaCert(pem: string): void {
+  const url = URL.createObjectURL(new Blob([pem], { type: 'application/x-x509-ca-cert' }))
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = 'dsh-web-relay-ca.crt'
+  anchor.click()
+  URL.revokeObjectURL(url)
 }
 
 /**

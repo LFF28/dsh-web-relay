@@ -66,6 +66,7 @@
 | `publicAuthority` | `string` | 已生效的权威，空字符串表示尚未生效 |
 | `observedHostKeyFingerprint` | `string` | 首次连接时实地观察到（或按固定值校验通过）的中继主机公钥指纹 |
 | `caFingerprint` | `string` | 中继 CA 根证书的 `SHA256:…` 指纹，供用户与 VPS 上 `data/pki/authorities/dsh-relay/root.crt` 核对 |
+| `caPem` | `string` | 根证书 PEM 全文（约 810 字节），供设置页的「下载根证书」按钮存成本地文件。刻意**不**红线化：它只有公钥材料，本来就要装到设备上。没走到第 10 步的部署里是空串 |
 | `gateway.sessionSecret` | `secret` | 网关会话 Cookie 的比对值；每次部署用 `randomBytes(24)` 的 base64url 重新生成并存进记录命名空间 |
 | `steps` | `{ id, title, status, detail }[]` | 最近一次引导的逐步结果，`status` 为 `ok`、`failed` 或 `skipped`；第 13 步的 `detail` 另带 `中继对外监听：…` |
 | `lastError` | `string` | 最近一次失败的原文摘要，成功时为空 |

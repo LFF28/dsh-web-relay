@@ -37,6 +37,13 @@ export interface RelayRecordView {
   readonly publicAuthority?: string
   /** 第 10 步取回的根证书指纹。 */
   readonly caFingerprint?: string
+  /**
+   * 第 10 步取回的根证书 PEM 全文，供页面存成本地文件。
+   *
+   * 只有公钥材料，本来就该装到设备上，因此它没有红线化、会原样到达浏览器。没走到
+   * 第 10 步的部署里是空串。
+   */
+  readonly caPem?: string
   /** 第 2 步观察到的中继主机公钥指纹。 */
   readonly observedHostKeyFingerprint?: string
   /** 最近一次失败。 */

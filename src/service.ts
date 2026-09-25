@@ -310,6 +310,7 @@ export class RelayRuntime {
       publicAuthority: authority,
       observedHostKeyFingerprint: outcome.hostKeyFingerprint,
       caFingerprint,
+      caPem: outcome.caPem,
       gateway: { sessionSecret: this.#sessionSecret },
       steps: [...log.steps],
       lastError: this.#lastError,

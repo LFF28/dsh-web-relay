@@ -42,6 +42,8 @@ ctx.slots.inject('settings.section', () => ctx.slots.register({
 
 **状态区。** 页面用 `web-relay-record` 渲染：状态、权威、访问地址、CA 指纹、逐步引导结果、最近一次错误、最近一次转发前预检。记录的 `state` 取 `unconfigured`、`bootstrapping`、`ready`、`failed` 之一，`tunnelState` 取 `stopped`、`starting`、`running`、`backing-off` 之一；页面的隧道状态直接读这一条记录，不走宿主 RPC。状态区是只读的。
 
+`caPem` 非空时状态区还带一个「下载根证书」按钮，把那份 PEM 用 `Blob` + 临时对象 URL 存成本地文件 `dsh-web-relay-ca.crt`。它不需要任何宿主端点：证书本来就在这份记录里，页面拼一个下载即可。这一步是给**服务器本机**的浏览器用的——远程页面上这个标签页根本不注册，手机拿不到这个按钮；手机上装根证书仍走本机复制、隔空投送或消息应用。
+
 **按钮与开关。**
 
 | 控件 | 动作 |
