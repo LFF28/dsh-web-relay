@@ -74,6 +74,8 @@ handle {
 
 站点块因此把这一段放进 `route`：`route` 按书写顺序执行，`basic_auth` 拒绝时短路，后面的 `header` 不会执行，401 上没有 `Set-Cookie`。这是站点模板里唯一必须用 `route` 的地方，改动那一块时要连带重跑"未认证请求不返回 `Set-Cookie`"这条自检。
 
+账号名固定为 `me`，但**口令弹窗不会提示它**：`basic_auth` 的 realm 字段在 Safari 与 Chrome 上都不显示，因为服务器控制的一段文字不该出现在受信任的浏览器 UI 里——这正是浏览器为防钓鱼拿掉它的理由。所以这个固定的公开名字既不是秘密也不带来任何安全收益，它只是必须由人记住的一次性输入，插件只在设置页「公网入口」一节与 README 里以文本提示它，不去改动浏览器弹窗。口令才是秘密：它不进 realm，也不落中继磁盘，落盘的只有 bcrypt 哈希。
+
 ## 中继侧的最小权限
 
 隧道本身用的不是管理账号。引导在中继上创建一个专用账号 `relay`：无有效 shell（`/usr/sbin/nologin`），`authorized_keys` 上的公钥带 `restrict,port-forwarding,permitlisten="127.0.0.1:18080"`，`sshd` 里再加 `Match User relay` 段落收紧到 `AllowTcpForwarding remote` 与 `PermitOpen none`。

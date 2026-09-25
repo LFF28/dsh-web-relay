@@ -103,8 +103,12 @@
 		# route 按书写顺序执行；没有它时 header 会排在 basic_auth 之前，
 		# 未认证的 401 响应也会带上 Set-Cookie，等于把会话密钥发给任何人。
 		route {
+			# 账号名是 HTTP Basic 的一部分，弹窗里那个输入框去不掉；Safari 与 Chrome
+			# 又不再显示 realm（服务器可写的文字不该出现在受信任的 UI 里，实测 Safari
+			# 的口令框只有主机名）。所以账号名没有可见的展示位，只出现在部署横幅、
+			# 设置里的部署记录和文档中。
 			basic_auth {
-				me @@BCRYPT_HASH@@
+				@@GATEWAY_USER@@ @@BCRYPT_HASH@@
 			}
 			header Set-Cookie "relay_session=@@SESSION_SECRET@@; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=43200"
 			import dsh-relay-upstream

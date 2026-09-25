@@ -115,6 +115,7 @@ function RelayForm(props: { t: Translate; face: RelayFace; view: RelayView }) {
             onChange={(event) => { edit('password', event.target.value) }}
           />
         </Field>
+        <p style={{ margin: 0, opacity: 0.72 }}>{t('gatewayUserHint')}</p>
       </Section>
 
       <Section title={t('startupSection')}>

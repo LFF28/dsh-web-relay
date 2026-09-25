@@ -37,7 +37,7 @@
 | `vps.identityFile` | `string?` | 空 | 管理账号私钥路径。留空则用系统身份解析（`~/.ssh/config`、默认私钥、`SSH_AUTH_SOCK`） |
 | `vps.hostKeyFingerprint` | `string?` | 空 | 期望的中继主机公钥指纹，`SHA256:…` 形式。留空时首次连接按 TOFU 记录并打印指纹 |
 | `gateway.port` | `number` | `8443` | 公网入口 HTTPS 端口，也是中继上唯一的 HTTP 端口。权威即 `<vps.host>:<gateway.port>` |
-| `gateway.password` | `secret?` | 空 | 网关口令，用户自选，手机每次进入时在浏览器口令框里输入。**每次部署都要重填**：它是 `secret` 字段，从不回传浏览器。填了地址却没有口令时写入被拒。插件只把它交给 `caddy hash-password`，明文不落中继的磁盘 |
+| `gateway.password` | `secret?` | 空 | 网关口令，用户自选，手机每次进入时在浏览器口令框里输入；账号名固定为 `me`，不是配置项，口令弹窗也不会提示它（设置页「公网入口」一节有文本提示）。**每次部署都要重填**：它是 `secret` 字段，从不回传浏览器。填了地址却没有口令时写入被拒。插件只把它交给 `caddy hash-password`，明文不落中继的磁盘 |
 | `deploy.request` | `number` | `0` | 部署计数：点一次部署加一。它让"一个字都没改也要重来一遍"成为一次真实的文档变更；宿主不读它 |
 | `deploy.autoDeploy` | `boolean` | `false` | 这次部署是否要求随 DSH 启动自动部署。只是请求：启动时还要看记录里上次部署是不是成功，见下面的"每次启动会做什么"。设置页上就是这个开关 |
 

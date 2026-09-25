@@ -169,6 +169,15 @@ export interface CaddyfileInputs {
 }
 
 /**
+ * 网关的固定用户名。
+ *
+ * 它不是部署参数：部署只让用户挑口令。HTTP Basic 的账号名必填且参与校验（实测账号
+ * 名不对、口令对仍是 401），而 Safari 与 Chrome 不再显示 realm，所以这个名字进不了弹窗，
+ * 只能靠设置页与文档里的文本提示。账号行取这一个常量。
+ */
+export const GATEWAY_USER = 'me'
+
+/**
  * 填 `deploy/Caddyfile.snippet` 的占位符。
  * @param template - 模板原文。
  * @param inputs - 值。
@@ -182,6 +191,7 @@ export function renderCaddyfile(template: string, inputs: CaddyfileInputs): stri
     SESSION_SECRET: inputs.sessionSecret,
     BCRYPT_HASH: inputs.passwordHash,
     RELAY_PORT: String(inputs.relayPort),
+    GATEWAY_USER,
   })
 }
 

@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | `authorized_keys.snippet` | `/home/relay/.ssh/authorized_keys`（托管块） | `@@PUBLIC_KEY@@`、`@@RELAY_PORT@@` |
 | `sshd_config.snippet` | `/etc/ssh/sshd_config.d/60-dsh-web-relay.conf`（托管块） | 无 |
-| `Caddyfile.snippet` | `/etc/caddy/Caddyfile`（托管块） | `@@AUTHORITY@@`、`@@GATEWAY_PORT@@`、`@@SESSION_SECRET@@`、`@@BCRYPT_HASH@@`、`@@RELAY_PORT@@` |
+| `Caddyfile.snippet` | `/etc/caddy/Caddyfile`（托管块） | `@@AUTHORITY@@`、`@@GATEWAY_PORT@@`、`@@SESSION_SECRET@@`、`@@BCRYPT_HASH@@`、`@@RELAY_PORT@@`、`@@GATEWAY_USER@@`（固定账号名） |
 | `fail2ban/filter.d/caddy-dsh-relay.conf` | `/etc/fail2ban/filter.d/` | 无 |
 | `fail2ban/jail.d/caddy-dsh-relay.conf` | `/etc/fail2ban/jail.d/` | `@@GATEWAY_PORT@@`、`@@HOME_EGRESS_IP@@`（引导从 `SSH_CONNECTION` 现取，取不到则为空串） |
 | `fail2ban/jail.d/jail-sshd.local` | 手工安装，插件不写 | `@@ADMIN_SOURCES@@`、`@@HOME_EGRESS_IP@@` |

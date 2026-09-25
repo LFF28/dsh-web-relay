@@ -8,7 +8,7 @@
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { renderCaddyfile } from '../lib/bootstrap.js'
+import { GATEWAY_USER, renderCaddyfile } from '../lib/bootstrap.js'
 import { ENTER_PATH } from '../lib/entry.js'
 import { readTemplate } from '../lib/templates.js'
 
@@ -73,4 +73,13 @@ test('恢复跳转的判据写在 handle_response 块内，其余 401 原样透�
 
 test('模板占位符全部填完', () => {
   assert.doesNotMatch(render(), /@@[A-Z0-9_]+@@/u)
+})
+
+test('basic_auth 的账号名取固定常量，且模板不含 realm', () => {
+  const block = /basic_auth \{\n([\s\S]*?)\n\t+\}/u.exec(render())
+  assert.notEqual(block, null, '站点块里应当有 basic_auth 块')
+  const account = (block?.[1] ?? '').trim().split(/\s+/u)[0] ?? ''
+  assert.equal(account, GATEWAY_USER)
+  // realm 里的文字在 Safari 与 Chrome 上不显示，留着只会让人以为弹窗会提示账号名。
+  assert.doesNotMatch(render(), /basic_auth bcrypt/u)
 })

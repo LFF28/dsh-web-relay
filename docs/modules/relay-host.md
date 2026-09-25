@@ -121,6 +121,7 @@ ss -ltnp | grep 18080        # 必须是 127.0.0.1:18080，不是 0.0.0.0:18080
 
 - **`route` 是必需的，不是风格选择。** Caddy 的指令执行顺序由内置指令表决定，不由书写顺序决定，而 `header` 在默认顺序里排在 `basic_auth` 之前。不套 `route` 时未认证的 401 响应也会带上 `Set-Cookie`，任何人访问一次域名就能领到会话密钥并凭它绕开口令。实测确认过这条绕过路径存在，套上 `route` 后 401 上不再有 `Set-Cookie`。详见 [security.md](../security.md)。
 - `header Cookie *relay_session=...*` 两侧的 `*` 是必要的：`Cookie` 是把多个 Cookie 拼在一起的单个头字段，不加 `*` 会按整串精确匹配，只要 DSH 自己的 Cookie 也在里面就匹配不上。实测：`Cookie: dsh-auth-…=…; relay_session=…; other=1` 能匹配。
+- **账号名固定为 `me`，而它在口令弹窗里没有展示位。** `basic_auth` 的账号名必填且和口令一样参与校验（实测：口令正确、账号名不对仍是 401），所以它当常量用而不是部署参数：做成可配置只会多一个要记住、且没有任何区分度的字段。曾用 realm 把它显示在弹窗里，实测 Safari 的口令框只写主机名、不理会 realm——服务器可写的文字不该出现在受信任的浏览器 UI 里，Safari 与 Chrome 都因此不再显示它（[httpd 也据此修订了文档](https://bz.apache.org/bugzilla/show_bug.cgi?id=69326)）。所以这个名字不以任何形式进弹窗，只用文本提示两处：设置页「公网入口」一节的口令输入框下方，以及 [README](../README.md)。
 - 会话密钥是一个静态随机串，等价于"把口令物化成一个 Cookie"。它存在记录的 `gateway.sessionSecret` 里，`gateway.password` 每次变化时一并重置，因此换口令会立刻作废所有网关会话。轮换路径见 [operations.md](operations.md)。
 - 有效期是 `Max-Age=43200`（12 小时），这就是"每次进入输一次口令"的节奏：有效期内浏览器不再询问，过期后重新询问。要改频率就改这一处的 `Max-Age`，没有别的开关。
 - 用 `SameSite=Lax` 而不是 `Strict`：DSH 自己的 Cookie 已经是 `Strict`，网关 Cookie 只需要在顶层导航时带上，`Lax` 足够且不会在从外部直接粘贴链接进入时缺失。
@@ -195,7 +196,7 @@ ss -ltnp | grep 18080        # 必须是 127.0.0.1:18080，不是 0.0.0.0:18080
 	handle {
 		route {
 			basic_auth {
-				me @@BCRYPT_HASH@@
+				@@GATEWAY_USER@@ @@BCRYPT_HASH@@
 			}
 			header Set-Cookie "relay_session=@@SESSION_SECRET@@; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=43200"
 			import dsh-relay-upstream
