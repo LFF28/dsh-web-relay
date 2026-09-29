@@ -63,8 +63,9 @@ publicAuthority = canonicalAuthority(vps.host) + ':' + gateway.port
   │            期望：TLS 握手成功；得到 401 或 200
   │
   ├─ 探测 ③：带网关会话 Cookie 与 Accept: text/html 再打一次同一个地址
-  │            期望：303，且 Set-Cookie 里有带 Secure 的 dsh-auth-…
-  │            （入口关掉时期望 403 而不是 303）
+  │            期望：200 过渡页（x-dsh-web-relay-handshake: transition），
+  │            且 Set-Cookie 里有带 Secure 的 dsh-auth-…
+  │            （入口关掉时期望 403）
   │
   ├─ 探测 ④：带着 ③ 换来的 DSH Cookie 打第三次
   │            期望：200（权威绑定的 Cookie 被接受）
@@ -76,7 +77,7 @@ publicAuthority = canonicalAuthority(vps.host) + ':' + gateway.port
 - 探测 ① 只测"围栏是否接受这个 Host"，因此它命中 `/api/` 下的任一路径即可；不带 Cookie 时正确的期望是 **401**（不是 403）。**403 就是权威没生效的确定信号**。这一条是本模块最有价值的断言：它把一个模糊的"手机打不开"变成了明确的分类。
 - 探测 ① 直接连 `127.0.0.1:<dshPort>`，不过隧道，因此它能把"权威没生效"与"隧道没通"分开——这是两个位置完全不同的故障。
 - 探测 ② 会真的走公网。它验证 TLS 证书链、Caddy 是否在跑、安全组是否开放、以及隧道是否真的把流量送到了。默认开启，可用 `selfCheck.publicProbe: false` 关掉（例如内网主机不能直连公网时）。
-- 探测 ③ 与 ④ 走的就是操作者首访的那条路：中继把这次文档导航在内部改写成 `/relay/enter`（见 [entry.md](entry.md)），插件换票、中继补 `Secure`、回跳 `/`。它们因此同时盯着三件容易静默失效的事——改写还在、换票还在、`header_down Set-Cookie "$" "; Secure"` 还在。**只有这三跳一起验证，"裸地址打开就是 200"才算被证明过**，这也是原来靠人工核对的那条 `Secure` 清单现在由自检负责的原因。
+- 探测 ③ 与 ④ 走的就是操作者首访的那条路：中继把这次文档导航在内部改写成 `/relay/enter`（见 [entry.md](entry.md)），插件换票、中继补 `Secure`、页面跳回 `/`。③ 只认状态码不够——过渡页与界面都是 200——所以它同时认那个 `x-dsh-web-relay-handshake: transition` 头；**200 而不是 303 本身就是断言**：Safari 不保存 3xx 响应上的 `Set-Cookie`，303 会让 iOS 上的首访无限跳转（[entry.md](entry.md)）。它们因此同时盯着三件容易静默失效的事——改写还在、换票还在、`header_down Set-Cookie "$" "; Secure"` 还在。**只有这三跳一起验证，"裸地址打开就是 200"才算被证明过**，这也是原来靠人工核对的那条 `Secure` 清单现在由自检负责的原因。
 - 会话密钥是 ③ ④ 唯一的凭据：它等价于一次口令通过，绕开口令提示直接走到上游，因此探测本身不产生口令失败、不喂 fail2ban，也不把口令发到公网。它是公网上唯一的密文凭据，所以只在根证书已取回、对端身份可校验时才发出去——否则只做 ①②，结论里注明"未验证裸地址带路"。同理，`selfCheck.publicProbe: false` 时设备上发生的一切都靠人工验证。
 - 自检发生在部署之后，**失败不阻止 profile 启动**。远程访问是附加能力，让本地 `dsh web` 因为公网链路问题起不来是不可接受的。失败只写日志与记录的 `lastError`。
 
@@ -91,8 +92,10 @@ publicAuthority = canonicalAuthority(vps.host) + ':' + gateway.port
 | 探测 ② TLS 证书校验失败 | 客户端不信任中继 CA | 输出根证书指纹，并指向 [entry.md](entry.md) 里把根证书送到设备的方式 |
 | 探测 ② 401 但浏览器仍打不开 | 浏览器侧 Cookie 或网关口令 | 指向 [security.md](../security.md) 的"必须成立的前置条件" |
 | 探测 ② 超时 | 安全组 / Caddy 未监听 / 端口不通 | 指向 [relay-host.md](relay-host.md) 的防火墙清单 |
-| 探测 ③ 拿到 401 而不是 303 | 中继上的 Caddyfile 还是旧版（没有 `@noDsh` 改写） | 重新部署一次，让第 9 步重写并 reload |
-| 探测 ③ 的 303 里没有 `dsh-auth-…` | 中继上的 Caddyfile 是旧版 | 同上 |
+| 探测 ③ 拿到 401 而不是 200 | 中继上的 Caddyfile 还是旧版（没有 `@noDsh` 改写） | 重新部署一次，让第 9 步重写并 reload |
+| 探测 ③ 回了 303 | 中继上跑的还是旧版插件（303 那版在 Safari 上会无限跳转） | 在中继主机上重新部署一次，让插件换成 200 过渡页 |
+| 探测 ③ 没有 `x-dsh-web-relay-handshake: transition` | 同上：这一跳不是插件答的过渡页 | 同上 |
+| 探测 ③ 里没有 `dsh-auth-…` | 中继上的 Caddyfile 是旧版 | 重新部署一次，让第 9 步重写并 reload |
 | 探测 ③ 的 Cookie 没有 `Secure` | `header_down` 没生效 | 检查上游片段是否被人改过，重新部署一次 |
 | 探测 ④ 不是 200 | 换来的 Cookie 被拒（权威绑定的名字对不上） | 打印换到的 Cookie 名与 `webRelay.authority()`，指出差异 |
 

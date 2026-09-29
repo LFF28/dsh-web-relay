@@ -384,11 +384,14 @@ sshd -T -C user=relay,host=relay,addr=127.0.0.1 | grep -iE 'gatewayports|permito
 curl -sS --cacert <ca> -D- -o /dev/null https://<authority>/ | grep -iE '^HTTP|^set-cookie'
 
 # 首访：裸地址 + 文档导航的 Accept，未带任何 Cookie
-# 期望 303、location: /、两条 Cookie（relay_session 与 dsh-auth-…）都带 Secure
-# -c/-b 是必需的：curl 默认不保存 Cookie，不带上它跟跳转会一直绕到 max-redirs
-curl -sS --cacert <ca> -u me:<pw> -c <jar> -b <jar> -H 'Accept: text/html' -D- -o /dev/null https://<authority>/ | grep -iE '^HTTP|^location|^set-cookie'
+# 期望 200、x-dsh-web-relay-handshake: transition、**没有 location**，
+# 两条 Cookie（relay_session 与 dsh-auth-…）都带 Secure。
+# 200 而不是 303 是这条设计成立的条件，不是风格：Safari 不保存 3xx 上的
+# Set-Cookie，回 303 时 iOS 首访会一直跳到「发生了太多重定向」。
+curl -sS --cacert <ca> -u me:<pw> -c <jar> -b <jar> -H 'Accept: text/html' -D- -o /dev/null https://<authority>/ | grep -iE '^HTTP|^location|^set-cookie|x-dsh-web-relay-handshake'
 
-# 带着刚拿到的 Cookie 再取一次：期望 200，且响应体里有 __DSH_BOOT__
+# 带着刚拿到的 Cookie 再取一次（浏览器 meta refresh 的那一步）：期望 200 界面，
+# 响应体里有 __DSH_BOOT__，且没有换票标记头
 curl -sS --cacert <ca> -u me:<pw> -c <jar> -b <jar> -H 'Accept: text/html' https://<authority>/ | grep -c __DSH_BOOT__
 
 # 失效 Cookie 的恢复路径：改坏 dsh-auth-… 的值后跟跳转，期望两跳后 200
@@ -404,7 +407,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' --max-time 3 http://<authority>/
 三条必查项：
 
 1. **未认证请求不得带 `set-cookie`。** 带上就说明 `handle` 段漏了 `route`，任何人都能领到会话密钥并绕开口令。这是整份清单里最容易在改动中被破坏、又最不显眼的一条。
-2. **首访必须被带到换票点。** 第 4 条命令拿到 `303`、`location: /` 才算这条设计成立；拿到 `401` 说明中继上的 Caddyfile 还是旧版（没有 `@noDsh` 改写），重新部署一次。引导第 13 步的自检会自己走完这三跳，失败时直接写在步骤说明里。
+2. **首访必须被带到换票点，而且那一跳必须是 200。** 第 4 条命令要拿到 `200`、`x-dsh-web-relay-handshake: transition`、**没有 `location`**，且两条 Cookie 都在。拿到 `401` 说明中继上的 Caddyfile 还是旧版（没有 `@noDsh` 改写）；拿到 `303` 说明中继上跑的还是旧版插件——那一版在 Safari 上会无限跳转，重新部署一次即可。引导第 13 步的自检会自己走完这三跳并认这个标记头，失败时直接写在步骤说明里。
 3. **认证成功后必须带 `relay_session`。** 缺它时 WebSocket 握手会失败，而普通请求看起来一切正常。
 4. **认证成功后每条 `set-cookie` 都要带 `Secure`**，包括 DSH 自己那条 `dsh-auth-…`。缺它就说明 `header_down` 那一行掉了或落到了别处；`dsh-auth-…` 被追加成 `Secure; Secure` 不改变行为（重复的布尔属性浏览器忽略），但说明改写被换成了会重复追加的写法。这一条同样由第 13 步盯着。
 

@@ -31,6 +31,7 @@
 | 页面加载出 401，且地址栏停在 `/relay/enter` | 恢复跳转发生过，但换票没成功 | 内网启动日志的自检第 ③ 项；它区分"改写不在了"与"换票失败" |
 | 页面加载出 401，且响应体是 `unauthorized` | 请求不是文档导航（`/api`、资源、WebSocket），中继因此按设计原样透传 401 | 若是浏览器首访，检查请求的 `Accept` 是否带 `text/html`；见 [entry.md](entry.md) |
 | 地址栏里出现过 `/relay/enter` 后回到 `/` | 正常：Cookie 在但已失效，中继用一次可见跳转把浏览器送回换票点 | 不用处理；想少一次跳转就清掉该站点数据再打开裸地址 |
+| 手机（Safari）报「发生了太多重定向」 | Safari 不保存 3xx 响应上的 `Set-Cookie`。这一版已经把换票那一跳改成 200 过渡页，所以真遇到它说明中继上跑的还是旧版插件，或者浏览器连 200 上的 Cookie 都存不下 | 先在中继上重新部署一次（换票那一跳应当回 `200` + `x-dsh-web-relay-handshake: transition`，见 [relay-host.md](relay-host.md) 的自检清单）。仍是转圈时插件会在第 6 次停在说明页，按那一页的提示允许该站点使用 Cookie，或换 Chromium/Firefox 打开 |
 | Caddy 返回 502 "隧道未连接" | 内网主机的隧道没起来，或端口不一致 | 内网隧道日志的 `lastExit.message`；再查中继的 `permitlisten` 与 Caddy 上游地址 |
 | 隧道日志反复出现 `remote port forwarding failed for listen port 18080` | 端口被残留会话占着（预检本应已清掉），或 `permitlisten` 与 `tunnel.relayPort` 不一致 | 设置页状态区的 `lastPreflight`（`released` 刚清过一次 / `refused` 被占但不是本部署的残留 / `skipped` 预检没跑成）；再查中继 `ss -ltnp \| grep 18080`，以及 `journalctl -u ssh \| grep -iE 'address already in use\|request was denied'` |
 | 隧道日志出现 `Host key verification failed` | 中继换了主机密钥 | 核对云控制台指纹后清空记录的 `observedHostKeyFingerprint` 并重新部署 |

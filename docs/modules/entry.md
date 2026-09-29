@@ -25,8 +25,13 @@ GET /relay/enter     # 换票点，公网 HTTP 面上唯一属于插件的路由
 ```
 1. 本地发起 GET http://127.0.0.1:<dshPort>/?token=<启动令牌>，Host 设为 publicAuthority
 2. 收下这一跳的 303 与它下发的 Set-Cookie
-3. 向浏览器回 303，Location 为 /，原样转发 Set-Cookie
+3. 向浏览器回 200 过渡页，原样转发 Set-Cookie，页面自己跳回 /
 ```
+
+第 3 步回的是 **200 而不是 303**，这是这一跳唯一不直观的地方。DSH 的会话 Cookie 只能挂在一次响应上，而 Safari 不保存 3xx 响应里的 `Set-Cookie`（[WebKit bug 186448](https://bugs.webkit.org/show_bug.cgi?id=186448)，2018 年报出、至今未修）：回 303 时 Safari 每一轮都像新客户端，中继重新改写、换票点又回一个 303，直到它报「发生了太多重定向」——Firefox 与 Chrome 保存 3xx 上的 Cookie，所以这个缺陷只在 iOS 上暴露。200 是普通响应，Cookie 照常入账；页面用一条 `meta refresh` 与一行 `location.replace` 回到干净的 `/`，两者都给是为了脚本被禁时仍然工作。
+
+这一跳带一个 `x-dsh-web-relay-handshake: transition` 响应头。过渡页与界面都是 200，状态码本身不足以区分"换票发生了"与"没有发生"，自检与排查因此认这个头。
+
 
 第 1 步是关键的复用点：启动令牌来自 `ctx.connection.authenticatedUrl(...)`，它是 DSH 的公开方法，把"本进程当前的启动令牌"拼到给定 URL 上。插件因此**永远不接触签名密钥**，也不需要知道 Cookie 是怎么生成的。那一跳走的是 DSH 自己的 `authorizeIndex()`，与 `dsh web` 在 LAN 上的行为完全一致。实测换票这一跳回 `303`、`location: /`，并原样带出 DSH 下发的那条 `Set-Cookie`（口令分支上中继另外还写一条 `relay_session`）。
 
@@ -41,9 +46,13 @@ GET /relay/enter     # 换票点，公网 HTTP 面上唯一属于插件的路由
 操作者打开的是 `https://<publicAuthority>/`。没有 DSH 会话 Cookie 时它本来是 DSH 的 `401`，中继在**服务端**把这次请求改写成 `/relay/enter`（`deploy/Caddyfile.snippet` 里的 `@noDsh`），于是换票点换到 Cookie 并回 `303` 到 `/`，浏览器地址栏里始终只有裸权威：
 
 ```
-GET /   （无 DSH Cookie，Accept: text/html）→ 内部改写 → GET /relay/enter → 303 / + Set-Cookie
+GET /   （无 DSH Cookie，Accept: text/html）→ 内部改写 → GET /relay/enter
+GET /relay/enter → 200 过渡页 + Set-Cookie（浏览器在这一跳存下 Cookie）
 GET /   （带刚拿到的 Cookie）                → 直通 → 200 界面
 ```
+
+中间那一跳的页面只有一行文字，它是"Cookie 没入账"的唯一证据：带着 DSH 会话 Cookie 的请求不会被改写到这里。因此插件按来源地址计窗口内的命中次数，超过 5 次就改答一页说明（`x-dsh-web-relay-handshake: blocked`），说清"浏览器没保存 Cookie"并给出两个可操作的做法，而不是让任何人继续转圈。这个计数只影响这一页的应答，`/api` 与静态资源完全不经过它。
+
 
 改写只针对文档导航：判据是 `Accept` 带 `text/html` 且 Cookie 里没有 `dsh-auth-`。`/api`、页面自己发起的资源请求与 WebSocket 握手都不带这个 `Accept`，它们各自的 `401` 原样透传——那是客户端自己要处理的信号，变成一次跳转就成了"接口返回了一张 HTML 页面"。改写不看路径：`/`、`/index.html` 与地址栏里手敲的任何路径都落到同一个换票点。
 

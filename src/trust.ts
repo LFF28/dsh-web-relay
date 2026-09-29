@@ -13,6 +13,7 @@ import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
+import { HANDSHAKE_HEADER, HANDSHAKE_TRANSITION } from './entry.js'
 import type { RelayLogger } from './tunnel.js'
 
 /** 一次自检的结论。 */
@@ -97,12 +98,16 @@ export class Trust {
    * 公网自检：走真实 HTTPS，按浏览器的顺序走一遍首访。
    *
    * 三跳：不带任何头打一次 `/`（期望 401 或 200，证明链路上有人应答）；带网关会话
-   * Cookie 与文档导航的 `Accept` 再打一次（期望 303 —— 中继把这次导航在内部改写成
-   * 了换票点，插件换了票并回跳 `/`）；最后带着换来的 DSH Cookie 打第三次（期望
-   * 200 —— 权威绑定的 Cookie 被接受）。
+   * Cookie 与文档导航的 `Accept` 再打一次（期望 200 且带换票标记头 —— 中继把这次
+   * 导航在内部改写成换票点，插件换了票并回一页过渡页）；最后带着换来的 DSH Cookie
+   * 打第三次（期望 200 —— 权威绑定的 Cookie 被接受）。
+   *
+   * 中间那一跳**必须是 200 而不是 303**：Safari 不保存 3xx 响应上的 `Set-Cookie`，
+   * 303 会让它每一轮都像新客户端，直到报「发生了太多重定向」。这条断言把那个故障
+   * 挡在部署阶段；只认状态码不够（过渡页与界面都是 200），所以同时认标记头。
    *
    * 入口关掉时中间那一跳期望 403：改写照样发生，差别只在换票点答一段说明。拿到
-   * 303 说明开关没生效，那等于把关掉的入口又打开了一次。
+   * 200 说明开关没生效，那等于把关掉的入口又打开了一次。
    *
    * 会话密钥是这几跳里唯一的凭据：它绕开网关口令，因此探测本身不产生口令失败、
    * 不喂 fail2ban，也不把口令发到公网。它是公网上唯一的密文凭据，所以只在根证书
@@ -160,17 +165,23 @@ export class Trust {
             detail: `${head}；入口已关闭，裸地址却${describeStatus(entered.status)}（期望 403）：开关没生效，重新引导一次`,
           }
     }
-    if (entered.status !== 303) {
+    if (entered.status !== 200) {
       return {
         ok: false,
-        detail: `${head}；裸地址没有带路（${describeStatus(entered.status)}，期望 303）：中继上的 Caddyfile 还没有这条改写，重新引导一次`,
+        detail: `${head}；裸地址没有带路（${describeStatus(entered.status)}，期望 200 过渡页）：中继上的 Caddyfile 还没有这条改写，重新引导一次`,
+      }
+    }
+    if (entered.handshake !== HANDSHAKE_TRANSITION) {
+      return {
+        ok: false,
+        detail: `${head}；换票那一跳回的 200 不是过渡页（${HANDSHAKE_HEADER}: ${entered.handshake ?? '（没有这个头）'}）：中继上跑的还是旧版插件，重新部署一次`,
       }
     }
     const mintedRaw = cookieOf(entered.setCookie, 'dsh-auth-')
     if (mintedRaw === undefined) {
       return {
         ok: false,
-        detail: `${head}；换票的 303 里没有 DSH 会话 Cookie：中继上的 Caddyfile 是旧版，重新引导一次`,
+        detail: `${head}；换票的过渡页里没有 DSH 会话 Cookie：中继上的 Caddyfile 是旧版，重新引导一次`,
       }
     }
     if (!/;\s*Secure(?:;|$)/iu.test(mintedRaw)) {
@@ -193,7 +204,7 @@ export class Trust {
     }
     return {
       ok: true,
-      detail: `${head}；裸地址直接进入界面（换票 303、会话 Cookie 带 Secure、换来 200）`,
+      detail: `${head}；裸地址直接进入界面（换票一页过渡页、会话 Cookie 带 Secure、换来 200）`,
     }
   }
 }
@@ -270,16 +281,18 @@ async function httpsResponse(spec: HttpsProbeSpec): Promise<HttpsResponse> {
       ...spec.ca === undefined ? {} : { ca: spec.ca },
     }, (res) => {
       const setCookie = res.headers['set-cookie'] ?? []
+      const handshake = res.headers[HANDSHAKE_HEADER]
       res.resume()
       res.on('end', () => {
         resolve({
           status: res.statusCode,
           setCookie: Array.isArray(setCookie) ? setCookie : [setCookie],
+          handshake: typeof handshake === 'string' ? handshake : undefined,
         })
       })
     })
     req.on('timeout', () => { req.destroy() })
-    req.on('error', () => { resolve({ status: undefined, setCookie: [] }) })
+    req.on('error', () => { resolve({ status: undefined, setCookie: [], handshake: undefined }) })
     req.end()
   })
 }
@@ -290,6 +303,8 @@ interface HttpsResponse {
   readonly status: number | undefined
   /** 全部 `Set-Cookie`。 */
   readonly setCookie: readonly string[]
+  /** `x-dsh-web-relay-handshake` 的值；没有这个头时为 undefined。 */
+  readonly handshake: string | undefined
 }
 
 /**

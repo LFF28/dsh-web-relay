@@ -77,7 +77,7 @@ Host 半边（`lib/index.js`）暴露一个 `dsh-web-relay` 插件，内部按�
 | `bootstrap` | 幂等引导：登录中继、建受限用户、装 Caddy、发证书、取回 CA，见 [modules/bootstrap.md](modules/bootstrap.md) |
 | `trust` | 把 `publicAuthority` 变成围栏受信项（重解析 `connection` 行），并跑回环与公网自检，见 [modules/trust.md](modules/trust.md) |
 | `tunnel` | 转发前预检（清掉上一轮残留的监听端点）、SSH 反向转发子进程的生命周期、退避、健康判定、拆除，见 [modules/tunnel.md](modules/tunnel.md) |
-| `entry` | `/relay/enter` 一条精确路由（换票点）：只把启动令牌换成 DSH Cookie；中继把裸地址上的文档导航在内部改写到它，见 [modules/entry.md](modules/entry.md) |
+| `entry` | `/relay/enter` 一条精确路由（换票点）：只把启动令牌换成 DSH Cookie，并回一页 200 过渡页（3xx 上的 Cookie 在 Safari 上会被丢掉）；中继把裸地址上的文档导航在内部改写到它，见 [modules/entry.md](modules/entry.md) |
 
 Client 半边（`lib/client.js`）只做一件事：向 `settings.section` 注册一个以 `web-relay` 为 `id` 的标签页（设置 ▸ 远程访问）。页面自绘表单与状态区，只依赖平台模块表里的 `react`、`react/jsx-runtime`、`@deepseek-ai/dsh-client-ui-primitives`，其余全部走服务：`ctx.slots`、`ctx.settingsScope`、`ctx.locale`。
 
