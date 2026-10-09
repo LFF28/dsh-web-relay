@@ -36,7 +36,7 @@
 | --- | --- | --- | --- |
 | 行为旋钮 | 包内 `cordis.patch.yml` 的行 `config` | 包作者 | 超时、退避序列、入口与自检开关、日志标签；都带默认值，无需配置即可运行 |
 | 部署参数 | settings 命名空间 `web-relay` | 用户在设置页里填，点部署才写下去 | 中继地址、管理账号与其私钥路径、网关口令、主机密钥指纹固定 |
-| 运行记录 | settings 命名空间 `web-relay-record` | 插件 | 引导状态、观察到的指纹、访问地址、CA 指纹、引导步骤结果 |
+| 运行记录 | `$DSH_HOME/dsh-web-relay/record.json`，经 `GET /api/web-relay.record` 出去 | 插件 | 引导状态、观察到的指纹、访问地址、CA 指纹、引导步骤结果 |
 
 把部署参数放进 settings 而不是 patch 文件，有三个直接后果：
 
@@ -79,7 +79,7 @@ Host 半边（`lib/index.js`）暴露一个 `dsh-web-relay` 插件，内部按�
 | `tunnel` | 转发前预检（清掉上一轮残留的监听端点）、SSH 反向转发子进程的生命周期、退避、健康判定、拆除，见 [modules/tunnel.md](modules/tunnel.md) |
 | `entry` | `/relay/enter` 一条精确路由（换票点）：只把启动令牌换成 DSH Cookie，并回一页 200 过渡页（3xx 上的 Cookie 在 Safari 上会被丢掉）；中继把裸地址上的文档导航在内部改写到它，见 [modules/entry.md](modules/entry.md) |
 
-Client 半边（`lib/client.js`）只做一件事：向 `settings.section` 注册一个以 `web-relay` 为 `id` 的标签页（设置 ▸ 远程访问）。页面自绘表单与状态区，只依赖平台模块表里的 `react`、`react/jsx-runtime`、`@deepseek-ai/dsh-client-ui-primitives`，其余全部走服务：`ctx.slots`、`ctx.settingsScope`、`ctx.locale`。
+Client 半边（`lib/client.js`）只做一件事：向 `settings.section` 注册一个以 `web-relay` 为 `id` 的标签页（设置 ▸ 远程访问）。页面自绘表单与状态区，只依赖平台模块表里的 `react`、`react/jsx-runtime`、`@deepseek-ai/dsh-client-ui-primitives`，其余全部走服务：`ctx.slots`、`ctx.configForms`、`ctx.locale`。
 
 ## 服务
 

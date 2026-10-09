@@ -1,9 +1,15 @@
 /**
  * 设置页的业务面。
  *
- * 页面渲染需要的一切都来自设置：`web-relay` 是用户写的参数，`web-relay-record`
- * 是宿主写的记录。插件不给客户端开 RPC 通道——记录既然是宿主写下的最后事实，
- * 让页面读它就不必再造一条只在浏览器打开时才有用的事件线。
+ * 数据来自两条不同的通道，因此这里也分两半：
+ *
+ * - **部署参数**走 `ctx.configForms`，它就是插件 `Config` 里那棵 volatile 子树。
+ *   写它 = 请求一次部署。
+ * - **运行记录**走插件自己的 `/api/web-relay.record`（DSH 共享 API 通道，已在认证
+ *   围栏之后）。它是宿主写下的状态，不属于"用户配置"，因此不在配置文档里。
+ *
+ * 记录体量小，但不能一直轮询：页面挂载时取一次，之后只在一次部署真正在进行时轮询，
+ * 状态落定即停。中继那条链路带宽有限，闲置时的定时请求是不该有的开销。
  * @module dsh-web-relay/client/face
  */
 
@@ -40,7 +46,7 @@ export interface RelayRecordView {
   /**
    * 第 10 步取回的根证书 PEM 全文，供页面存成本地文件。
    *
-   * 只有公钥材料，本来就该装到设备上，因此它没有红线化、会原样到达浏览器。没走到
+   * 只有公钥材料，本来就该装到设备上，因此它不做红线化、会原样到达浏览器。没走到
    * 第 10 步的部署里是空串。
    */
   readonly caPem?: string
@@ -74,8 +80,8 @@ export interface RelayDraft {
   readonly autoDeploy: boolean
 }
 
-/** 设置快照在页面里用到的部分。 */
-export interface RelayDeploymentView {
+/** 插件 `Config` 里 `deployment` 那一节，按页面用到的字段重新声明。 */
+export interface RelayDeploymentConfig {
   /** `vps` 一节。 */
   readonly vps?: {
     /** 中继地址。 */
@@ -112,14 +118,25 @@ export interface RelayDeploymentView {
   }
 }
 
+/**
+ * 配置表单的整节值。
+ *
+ * 多一层 `deployment` 是因为 volatile 子树在 `Config` 里的位置就在那里：设置服务的
+ * 表单只投影 volatile 字段，于是这一层是表单值的最外层。
+ */
+export interface RelayConfigSection {
+  /** 部署参数。 */
+  readonly deployment?: RelayDeploymentConfig
+}
+
 /** 一次渲染用到的完整快照。 */
 export interface RelayView {
-  /** 设置读取的状态。`unavailable` 表示这个浏览器不被允许读宿主文档（非 loopback 页面）。 */
+  /** 配置读取的状态。`unavailable` 表示这个浏览器不被允许读宿主文档（非 loopback 页面）。 */
   readonly status: 'loading' | 'ready' | 'unavailable'
   /** 当前部署参数是否可写。 */
   readonly writable: boolean
   /** 用户填写的部署参数。 */
-  readonly deployment?: RelayDeploymentView
+  readonly deployment?: RelayDeploymentConfig
   /** 宿主写下的记录。 */
   readonly record?: RelayRecordView
   /** 引导状态。 */
@@ -141,13 +158,13 @@ export interface RelayFace {
    */
   readonly useRelay: <T>(select: (state: RelayView) => T) => T
   /**
-   * 部署：把表单写进设置，顺带把部署计数加一。
+   * 部署：把表单写进插件配置，顺带把部署计数加一。
    *
-   * 写入本身就是请求——宿主观察到这次提交就跑一遍完整引导，没有第二参数、没有
-   * 差异判断。计数保证"什么都没改也要重来一次"时这次写入仍然是一次真实变更。
+   * 写入本身就是请求——宿主观察到这次 volatile 提交就跑一遍完整引导，没有第二参数、
+   * 没有差异判断。计数保证"什么都没改也要重来一次"时这次写入仍然是一次真实变更。
    *
-   * 设置写入被宿主拒绝时作用域会静默重读文档（错误在远端被收进结果信封，作用域
-   * 不把它抛出来），所以这里用"计数有没有落地"判断这次部署有没有生效。
+   * 写入被宿主拒绝时表单会静默重读文档（错误在远端被收进结果信封，不会抛出来），
+   * 因此这里以 `mutate` 的返回值为准：`true` 才是这次部署真的落地了。
    * @param draft - 表单里的值。
    * @returns 写入落地时为 true；被宿主拒绝（文档没变）时为 false。
    */

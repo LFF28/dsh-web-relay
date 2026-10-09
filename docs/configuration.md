@@ -25,9 +25,9 @@
 
 转发前预检没有对应字段。它只在 `tunnel.relayPort` 确实被占、且持有者是本部署残留的 `sshd` / `sshd-session` 进程时才动手，因此不提供开关，理由见 [modules/tunnel.md](modules/tunnel.md)。
 
-## `web-relay`（用户填的部署参数）
+## `deployment`（用户填的部署参数）
 
-用户在 **设置 ▸ 远程访问** 页里填，点「部署」才写下去，落盘在 `$DSH_HOME/settings.yaml`（`0600`）。
+用户在 **设置 ▸ 远程访问** 页里填，点「部署」才写下去。它是插件 `Config` 里的一棵 volatile 子树，落盘在 profile 的 `cordis.patch.yml`（`0600`，不是 git 仓库的一部分）。
 
 | 字段 | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
@@ -41,7 +41,13 @@
 | `deploy.request` | `number` | `0` | 部署计数：点一次部署加一。它让"一个字都没改也要重来一遍"成为一次真实的文档变更；宿主不读它 |
 | `deploy.autoDeploy` | `boolean` | `false` | 这次部署是否要求随 DSH 启动自动部署。只是请求：启动时还要看记录里上次部署是不是成功，见下面的"每次启动会做什么"。设置页上就是这个开关 |
 
-标记为 `secret` 的字段在发给浏览器时被替换成"已设置 / 未设置"，值本身不出宿主进程；`settings.yaml` 里仍是明文，文件权限是 `0600`，目录 `0700`。
+标记为 `secret` 的字段在发给浏览器时被替换成"已设置 / 未设置"，值本身不出宿主进程；profile 补丁里仍是明文，文件权限是 `0600`。
+
+### SSH 压缩
+
+`tunnel.extraOptions.Compression: "yes"` 打开 SSH 压缩（`ssh -C`）。它写在 profile 补丁的这一行里，不在包自己的 `cordis.patch.yml`——patch 的 `config` 是**整体替换**而不是深合并，而设置页写部署参数时会往 profile 层写同一行的 `config`；两个地方都写就等于谁后生效谁说了算。
+
+它压的是 **本机 → 中继** 那条快腿（实测约 3.3 MB/s），中继上的 sshd 在写进 `127.0.0.1:18080` 之前就已解压，所以 **中继 → 手机** 那条慢腿（约 0.35 MB/s）的字节数一个都不减。**它不是「手机上点会话就重连」的解**，理由与实测数据见 [modules/settings.md](modules/settings.md) 的「传输与心跳」。
 
 ### 配置前的前提
 
@@ -52,11 +58,11 @@
 
 这两条是**前置条件而不是待配置项**：中继上没有本插件的任何代码，管理登录属于主机管理员的既有设置，插件不该在别人的机器上改 SSH 认证策略。引导第 3 步实地探测这两条，报告 `id -u`、`sudo -n true` 的退出码与 `ss` 是否可用，缺失时停在那里并给出原文。
 
-因此 `web-relay` 里唯一的秘密是 `gateway.password`。
+因此 `deployment` 这一节里唯一的秘密是 `gateway.password`。
 
-## `web-relay-record`（插件写的运行记录）
+## 运行记录（插件写的宿主状态）
 
-插件拥有这个命名空间，设置页只读回显。它是这个页面唯一的宿主状态通道：页面通过客户端 settings 作用域读它，不需要额外的 Remote 命名空间。
+它不在配置文档里，因为 0.2 的设置文档只接受 volatile 字段的写入——记录是插件写的状态，不是用户配置。它落成 `$DSH_HOME/dsh-web-relay/record.json`（`0600`），只读出口是 `GET /api/web-relay.record`（挂在 DSH 共享 API 通道下，因此在认证围栏之后）。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -66,16 +72,19 @@
 | `publicAuthority` | `string` | 已生效的权威，空字符串表示尚未生效 |
 | `observedHostKeyFingerprint` | `string` | 首次连接时实地观察到（或按固定值校验通过）的中继主机公钥指纹 |
 | `caFingerprint` | `string` | 中继 CA 根证书的 `SHA256:…` 指纹，供用户与 VPS 上 `data/pki/authorities/dsh-relay/root.crt` 核对 |
-| `caPem` | `string` | 根证书 PEM 全文（约 810 字节），供设置页的「下载根证书」按钮存成本地文件。刻意**不**红线化：它只有公钥材料，本来就要装到设备上。没走到第 10 步的部署里是空串 |
-| `gateway.sessionSecret` | `secret` | 网关会话 Cookie 的比对值；每次部署用 `randomBytes(24)` 的 base64url 重新生成并存进记录命名空间 |
+| `caPem` | `string` | 根证书 PEM 全文（约 810 字节），供设置页的「下载根证书」按钮存成本地文件。刻意**不**剔除：它只有公钥材料，本来就要装到设备上。没走到第 10 步的部署里是空串 |
+| `gateway.sessionSecret` | `secret` | 网关会话 Cookie 的比对值；每次部署用 `randomBytes(24)` 的 base64url 重新生成。**它绝不离开宿主**：`recordView()` 的白名单把整个 `gateway` 一节挡在响应之外 |
 | `steps` | `{ id, title, status, detail }[]` | 最近一次引导的逐步结果，`status` 为 `ok`、`failed` 或 `skipped`；第 13 步的 `detail` 另带 `中继对外监听：…` |
 | `lastError` | `string` | 最近一次失败的原文摘要，成功时为空 |
+| `lastPreflight` | `{ outcome, message }` | 最近一次转发前预检的结果 |
 
 访问地址完全由 `publicAuthority` 决定：`https://<publicAuthority>/`。它不含任何秘密，因此可以放心收藏、同步与备份；承担身份的是网关口令与 DSH 的权威绑定 Cookie，首次访问时由中继在内部带路到换票点，见 [modules/entry.md](modules/entry.md)。
 
+记录里的 `gateway.sessionSecret` 与 `caPem` 是这份文件里唯一的敏感与非敏感特例，`recordView()` 的白名单逐字段决定谁能出网，见 [modules/settings.md](modules/settings.md)。
+
 ## 一次部署做了什么
 
-改动不在写入的那一刻生效——除**点部署**（或手工改这个设置文档）之外，插件不会重新配置中继。每次部署都是一遍完整的引导第 0–13 步，没有"只重做变了的那一半"这种逻辑；下面列出的是这些字段各自带来的后果。
+改动不在写入的那一刻生效——除**点部署**（或手工改 profile 补丁里的 `deployment`）之外，插件不会重新配置中继。每次部署都是一遍完整的引导第 0–13 步，没有"只重做变了的那一半"这种逻辑；下面列出的是这些字段各自带来的后果。
 
 | 改动的字段 | 部署时的动作 | 用户可见后果 |
 | --- | --- | --- |

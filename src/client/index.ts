@@ -1,9 +1,10 @@
 /**
  * dsh-web-relay 的浏览器半边。
  *
- * 一个贡献：设置菜单里的一个标签页。它只在宿主确实在服务这两个命名空间时注册
- * ——没装这个插件的部署不应该在设置菜单里留下它的痕迹，非 loopback 页面也读不到
- * 这两个命名空间，因此手机上不会出现这个标签。
+ * 一个贡献：设置菜单里的一个标签页。它只在宿主确实在服务这个插件条目时注册
+ * ——没装这个插件的部署不应该在设置菜单里留下它的痕迹。非 loopback 页面读不到
+ * 配置文档（`configForms` 在 memory 模式下是 `unavailable`），因此手机上不会出现
+ * 这个标签页，行为与迁移前一致。
  *
  * 运行时只 import 平台模块表里的包（`react`、`@deepseek-ai/dsh-client-ui-slots`、
  * `@deepseek-ai/dsh-client-ui-primitives`），其余全是 `import type`：客户端 bundle
@@ -14,25 +15,28 @@
 import { useSyncExternalStore } from 'react'
 // 仅类型：拉入 locale 插件的 Context 合并（ctx.locale）。
 import type {} from '@deepseek-ai/dsh-client-locale/client'
-// 仅类型：拉入 SettingsScope 的 Context 合并（ctx.settingsScope）与 settings.section 的槽位声明。
+// 仅类型：拉入配置表单服务的 Context 合并（ctx.configForms）与 settings.section 的槽位声明。
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 // 仅类型：拉入插槽注册表的 Context 合并（ctx.slots）。
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type { Context } from '@deepseek-ai/cordis'
-import type { SettingsScope, SettingsScopeSnapshot } from '@deepseek-ai/dsh-client-ui-settings/client'
-import { DEPLOYMENT_NS, RECORD_NS } from '../namespaces.js'
+import type { ConfigForm, ConfigFormSnapshot } from '@deepseek-ai/dsh-client-ui-settings/client'
+import { DEPLOYMENT_NS, RECORD_PATH } from '../namespaces.js'
 import { RelaySection } from './section.js'
-import type { RelayDeploymentView, RelayDraft, RelayFace, RelayRecordView, RelayView } from './face.js'
+import type { RelayConfigSection, RelayDraft, RelayFace, RelayRecordView, RelayView } from './face.js'
 import { en, zh } from './locales.js'
 
 /** 文案命名空间。 */
 export const NS = 'web-relay'
 
 /** 依赖的服务。 */
-export const inject = ['slots', 'locale', 'settingsScope']
+export const inject = ['slots', 'locale', 'configForms']
 
 /** 标签页在设置导航栏里的位置；排在内建的归档会话页之后。 */
 const SECTION_ORDER = 30
+
+/** 记录轮询的间隔（毫秒）。只在一次部署看起来还在进行时才用得上。 */
+const RECORD_POLL_MS = 1500
 
 /**
  * 装载客户端半边。
@@ -41,79 +45,112 @@ const SECTION_ORDER = 30
 export function apply(ctx: Context): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-web-relay: 文案')
 
-  const deploymentScope: SettingsScope<RelayDeploymentView> = ctx.settingsScope.bind({ namespace: DEPLOYMENT_NS })
-  const recordScope: SettingsScope<RelayRecordView> = ctx.settingsScope.bind({ namespace: RECORD_NS })
-  const describeFace = ctx.settingsScope.describe()
-  ctx.effect(() => {
-    let off: (() => void) | undefined
-    const sync = (): void => {
-      const served = new Set(describeFace.getSnapshot().view?.namespaces.map(view => view.ns) ?? [])
-      const available = served.has(DEPLOYMENT_NS) && served.has(RECORD_NS)
-      if (available && off === undefined) off = register(ctx, deploymentScope, recordScope)
-      else if (!available && off !== undefined) { off(); off = undefined }
-    }
-    const unsubscribe = describeFace.subscribe(sync)
-    void describeFace.ensure()
-    sync()
-    return () => { unsubscribe(); off?.() }
-  }, 'dsh-web-relay: 设置页')
+  const form = ctx.configForms.get<RelayConfigSection>(DEPLOYMENT_NS)
+  ctx.effect(
+    () => ctx.configForms.whileServed([DEPLOYMENT_NS], () => register(ctx, form)),
+    'dsh-web-relay: 设置页',
+  )
 }
 
 /**
  * 注册标签页。
  * @param ctx - 浏览器插件上下文。
- * @param deploymentScope - `web-relay` 命名空间的作用域。
- * @param recordScope - `web-relay-record` 命名空间的作用域。
+ * @param form - 插件条目的配置表单。
  * @returns 释放器。
  */
-function register(
-  ctx: Context,
-  deploymentScope: SettingsScope<RelayDeploymentView>,
-  recordScope: SettingsScope<RelayRecordView>,
-): () => void {
+function register(ctx: Context, form: ConfigForm<RelayConfigSection>): () => void {
   return ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'web-relay',
     order: SECTION_ORDER,
     label: () => ctx.locale.bind(NS)('nav'),
     locale: NS,
-    inject: () => createFace(deploymentScope, recordScope),
+    inject: () => createFace(form),
   }, RelaySection))
 }
 
 /**
  * 组装页面业务面。
  *
- * `useRelay` 用 `useSyncExternalStore` 读两份作用域快照：两个命名空间各自变化
- * 都会让页面重渲染，因为一次部署会同时写两边。
- * @param deploymentScope - `web-relay` 命名空间的作用域。
- * @param recordScope - `web-relay-record` 命名空间的作用域。
+ * 两条订阅：表单快照（部署参数）与记录（按需轮询）。任何一边变化都让页面重渲染。
+ * @param form - 插件条目的配置表单。
  * @returns 业务面。
  */
-function createFace(
-  deploymentScope: SettingsScope<RelayDeploymentView>,
-  recordScope: SettingsScope<RelayRecordView>,
-): RelayFace {
-  // `useSyncExternalStore` 要求 `getSnapshot` 在两次读之间返回同一个引用，而
-  // `project` 每次都造新对象。这里保留上一份投影，只有作用域真的变了才重算。
+function createFace(form: ConfigForm<RelayConfigSection>): RelayFace {
   let snapshot: RelayView | undefined
+  let record: RelayRecordView | undefined
+  let loaded = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let started = false
+  const listeners = new Set<() => void>()
+  const notify = (): void => { snapshot = undefined; for (const listener of listeners) listener() }
+
+  const refresh = async (): Promise<void> => {
+    try {
+      const response = await fetch(RECORD_PATH, {
+        credentials: 'include',
+        headers: { accept: 'application/json' },
+      })
+      record = response.ok ? await response.json() as RelayRecordView : undefined
+    } catch {
+      // 记录读不到不是错误：网络暂时不通时页面保持上一份，状态区不会因此变空。
+    }
+    loaded = true
+    notify()
+  }
+
+  /**
+   * 按当前记录决定要不要继续轮询。
+   *
+   * 只在"引导进行中"或"隧道正在连接/重连"时轮询：那两种状态下记录会自己变，页面
+   * 得跟着动。落定之后（就绪、失败、未配置）就停下来——中继那条链路带宽有限，闲置
+   * 时的定时请求是纯粹的开销。
+   */
+  const schedule = (): void => {
+    if (timer !== undefined) return
+    const busy = record?.state === 'bootstrapping'
+      || record?.tunnelState === 'starting'
+      || record?.tunnelState === 'backing-off'
+    if (!busy) return
+    timer = setTimeout(() => {
+      timer = undefined
+      void refresh().then(schedule)
+    }, RECORD_POLL_MS)
+  }
+
   const read = (): RelayView => {
-    snapshot ??= project(deploymentScope.getSnapshot(), recordScope.getSnapshot())
+    snapshot ??= project(form.getSnapshot(), record, loaded)
     return snapshot
   }
+
   const subscribe = (listener: () => void): (() => void) => {
-    const changed = (): void => { snapshot = undefined; listener() }
-    const offDeployment = deploymentScope.subscribe(changed)
-    const offRecord = recordScope.subscribe(changed)
-    return () => { offDeployment(); offRecord() }
+    listeners.add(listener)
+    // 首轮取记录只做一次：`subscribe` 会被 React 反复调用（StrictMode 下更是如此），
+    // 每次进来都发一个请求会让中继那条链路平白多出几倍流量。
+    if (!started) {
+      started = true
+      void refresh().then(schedule)
+    }
+    const offForm = form.subscribe(notify)
+    return () => {
+      offForm()
+      listeners.delete(listener)
+      if (listeners.size === 0 && timer !== undefined) {
+        clearTimeout(timer)
+        timer = undefined
+      }
+    }
   }
+
   return {
     useRelay: <T>(select: (view: RelayView) => T): T => select(useSyncExternalStore(subscribe, read)),
     deploy: async (draft: RelayDraft): Promise<boolean> => {
-      const current = deploymentScope.getSnapshot().value
+      const current = form.getSnapshot().value?.deployment
       const request = typeof current?.deploy?.request === 'number' ? current.deploy.request : 0
-      await deploymentScope.mutate(operations(draft, request + 1))
-      return deploymentScope.getSnapshot().value?.deploy?.request === request + 1
+      const landed = await form.mutate(operations(draft, request + 1))
+      // 写入成功后立刻取一次记录：宿主已经在跑了，页面不该等下一个轮询周期才动。
+      if (landed) void refresh().then(schedule)
+      return landed
     },
   }
 }
@@ -128,21 +165,23 @@ function createFace(
  * `deploy` 一段与表单值在这一次写入里一起提交：设置服务对解析后的值做深层相等
  * 短路，只改计数也足以让这次提交成为一次真实变更，于是"什么都没改也要重来一遍"
  * 与"改了字段"走的是同一条路。
+ *
+ * 路径的第一段是 `deployment`：volatile 子树在 `Config` 里的位置就在那里。
  * @param draft - 表单里的值。
  * @param request - 本次部署的请求计数。
  * @returns 操作列表。
  */
 function operations(draft: RelayDraft, request: number): SettingsPathOperation[] {
   return [
-    { op: 'set', path: ['vps', 'host'], value: draft.host.trim() },
-    { op: 'set', path: ['vps', 'port'], value: port(draft.sshPort, 22) },
-    { op: 'set', path: ['vps', 'user'], value: draft.user.trim() === '' ? 'root' : draft.user.trim() },
-    { op: 'set', path: ['vps', 'identityFile'], value: draft.identityFile.trim() },
-    { op: 'set', path: ['vps', 'hostKeyFingerprint'], value: draft.hostKeyFingerprint.trim() },
-    { op: 'set', path: ['gateway', 'port'], value: port(draft.gatewayPort, 8443) },
-    { op: 'set', path: ['gateway', 'password'], value: draft.password },
-    { op: 'set', path: ['deploy', 'request'], value: request },
-    { op: 'set', path: ['deploy', 'autoDeploy'], value: draft.autoDeploy },
+    { op: 'set', path: ['deployment', 'vps', 'host'], value: draft.host.trim() },
+    { op: 'set', path: ['deployment', 'vps', 'port'], value: port(draft.sshPort, 22) },
+    { op: 'set', path: ['deployment', 'vps', 'user'], value: draft.user.trim() === '' ? 'root' : draft.user.trim() },
+    { op: 'set', path: ['deployment', 'vps', 'identityFile'], value: draft.identityFile.trim() },
+    { op: 'set', path: ['deployment', 'vps', 'hostKeyFingerprint'], value: draft.hostKeyFingerprint.trim() },
+    { op: 'set', path: ['deployment', 'gateway', 'port'], value: port(draft.gatewayPort, 8443) },
+    { op: 'set', path: ['deployment', 'gateway', 'password'], value: draft.password },
+    { op: 'set', path: ['deployment', 'deploy', 'request'], value: request },
+    { op: 'set', path: ['deployment', 'deploy', 'autoDeploy'], value: draft.autoDeploy },
   ]
 }
 
@@ -164,27 +203,34 @@ function port(text: string, fallback: number): number {
 }
 
 /**
- * 把两份作用域快照投影成页面快照。
- * @param deployment - `web-relay` 的快照。
- * @param record - `web-relay-record` 的快照。
+ * 把表单快照与记录投影成页面快照。
+ *
+ * 表单 `unavailable` 时整页只读（与迁移前一致）；否则等记录第一次到位才显示就绪，
+ * 免得上半屏已经有表单、下半屏还空着。
+ * @param form - 配置表单快照。
+ * @param record - 最近一次取到的记录。
+ * @param loaded - 记录是不是已经取过一次。
  * @returns 页面快照。
  */
 function project(
-  deployment: SettingsScopeSnapshot<RelayDeploymentView>,
-  record: SettingsScopeSnapshot<RelayRecordView>,
+  form: ConfigFormSnapshot<RelayConfigSection>,
+  record: RelayRecordView | undefined,
+  loaded: boolean,
 ): RelayView {
-  const value = deployment.value
-  const written = record.value
-  const state = written?.state
-  const tunnel = written?.tunnelState
+  const value = form.value?.deployment
+  const state = record?.state
+  const tunnel = record?.tunnelState
+  const status = form.status === 'unavailable' ? 'unavailable'
+    : form.status === 'ready' && (record !== undefined || loaded) ? 'ready'
+      : 'loading'
   return {
-    status: deployment.status === 'ready' && record.status === 'ready' ? 'ready' : deployment.status,
-    writable: deployment.writable,
+    status,
+    writable: form.status === 'ready' && form.writable,
     ...value === undefined ? {} : { deployment: value },
-    ...written === undefined ? {} : { record: written },
+    ...record === undefined ? {} : { record },
     state: state === 'ready' || state === 'bootstrapping' || state === 'failed' ? state : 'unconfigured',
     tunnel: tunnel === 'starting' || tunnel === 'running' || tunnel === 'backing-off' ? tunnel : 'stopped',
-    authority: written?.publicAuthority ?? '',
-    steps: written?.steps ?? [],
+    authority: record?.publicAuthority ?? '',
+    steps: record?.steps ?? [],
   }
 }

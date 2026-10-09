@@ -31,10 +31,14 @@
 | SSE（`/api` 上的长响应）穿过 Caddy + SSH 隧道不缓冲 | Caddy 对 `Content-Length` 未知的响应立即 flush | 界面长时间不刷新 | 观察一次流式响应是否逐块到达 |
 | 隧道端点在 `permitlisten` 限制下只能绑 loopback | `GatewayPorts no` + 显式 `127.0.0.1:` 绑定 | 端点暴露在公网且无 TLS —— **严重** | 中继 `ss -ltnp \| grep 18080` 必须是 `127.0.0.1` |
 | 客户端半边的 9 个外部模块足够渲染设置页 | `PLATFORM_MODULES` 的闭集；设置页只用到基元与 slots | 设置页在浏览器里报模块解析失败 | 装好后打开设置 ▸ 远程访问，确认页面出现且可以部署 |
-| `ctx.settingsScope.bind({namespace})` 在插件半边可用 | `settings-scope.ts` 的 `bind` 导出 | 设置页无数据源，只能退回自建 RPC | 同上 |
+| `ctx.configForms.get(entryId)` 在插件半边可用 | `ui-settings` 的 `ConfigForms.get`；`whileServed` 按宿主服务的命名空间门槛注册 | 设置页无数据源，只能退回自建 RPC | 装好后打开设置 ▸ 远程访问，确认页面出现、表单可写、可以部署 |
+| 对象级 `.volatile()` 能承载整棵部署子树 | `volatileEntries` 递归收集引用，对象级 volatile 产出 `path: ['deployment']` 的**一个**引用；`isVolatilePath` 对该子树下每个路径都为真 | 要么设置页写不进任何字段（路径被判非 volatile），要么 volatile 嵌套被 `validateVolatileSchema` 拒绝 | `Config({ deployment: {…} }).deployment.get()` 返回补齐后的值；见 `tests/config.test.js` |
+| volatile 提交会跑 `internal/config` 瀑布 | `_commitVolatile()` 在提交前执行 `resolveConfig(fiber.runtime, ctx.waterfall(fiber, 'internal/config', raw, …))` | 交叉字段校验在设置页写入时被绕过，非法地址会存下去 | 非法 `vps.host` 的 volatile 提交被拒且运行引用的值不变；见 `tests/config.test.js` 与手工钩子验证 |
+| patch 的 `config` 是整体替换而不是深合并 | `applyEntryPatches` 里 `target[key] = value` | 把 SSH 压缩写在包自己的 `cordis.patch.yml` 里，会被设置页第一次写部署参数时整段覆盖掉 | 合成 profile 后确认 `web-relay` 行的 `config` 里 `Compression` 与 `deployment` 同时存在 |
+| 记录接口落在 `connection` 的认证围栏之后 | 该路径经 `ctx.connection.fetch.register` 注册，`rpc-host` 内部先 `admit(req)` | 插件在公网上开出一条绕过认证的状态接口 —— **严重** | 不带凭据 `GET /api/web-relay.record` 必须回 401；见 `tests/record.test.js` 对白名单的断言 |
 | 不带 `-p` 的 `ss -ltnH 'sport = :<port>'` 能看到别的用户持有的监听端点 | 无 `-p` 时读的是内核 socket 表，不需要特权；带 `-p` 时另一个用户的进程不显示 | 转发前预检误判端口是否空闲，残留清不掉 | 在中继上以管理账号跑一次，与 `sudo ss -ltnp` 的结果比对 |
 | 杀掉残留的 `sshd` 子进程后端口立刻可用 | 进程退出时内核关闭它的监听 fd；且 sshd 在 `bind` 前设了 `SO_REUSEADDR`（`channels.c` 的 `channel_setup_fwd_listener_tcpip`） | 预检杀完仍绑不上，退避继续空转 | 造一次残留（断开内网主机网络后重启插件，恢复网络再点一次部署），看下一轮的预检是否直接成功 |
 | 转发失败的两种原因只能从中继 `sshd` 日志区分 | 客户端两条路径都收敛成 `SSH2_MSG_REQUEST_FAILURE` | 把配置错当成端口残留，预检反复空跑 | 临时把 `permitlisten` 改成别的端口，观察中继日志出现 `but the request was denied.` |
 | 管理账号的免密 sudo 在非交互调用下成立 | 用户在中继上预先配好；第 3 步用 `sudo -n true` 探测 | 引导停在提权步骤，`sshd` 片段与 Caddyfile 都写不下去 | 中继上跑 `sudo -n true; echo $?`，期望 0；再关掉免密验证它确实报 `a password is required` |
 
-除客户端设置页那两项外，其余各项的核对都需要一台真实 VPS 与一台运行 `dsh web` 的内网主机；验证过的中继就是这样一组机器。前四项在 profile 启动时就会暴露，后面的项要按 [modules/bootstrap.md](modules/bootstrap.md) 的步骤顺序走完引导。
+设置页相关的三项（平台模块闭集、`ctx.configForms`、volatile 子树）在打开 设置 ▸ 远程访问 时就会暴露；`internal/config` 校验与记录接口的白名单有单测直接覆盖；其余各项的核对需要一台真实 VPS 与一台运行 `dsh web` 的内网主机，验证过的中继就是这样一组机器。前四项在 profile 启动时就会暴露，后面的项要按 [modules/bootstrap.md](modules/bootstrap.md) 的步骤顺序走完引导。

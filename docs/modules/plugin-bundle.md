@@ -43,20 +43,32 @@ Cordis 模块名用短名 `web-relay`（`export const name = 'web-relay'`），p
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/cordis-plugin-timer": "^1.1.4",
-    "@deepseek-ai/dsh-host-webserver": "^0.1.5-rc.2",
-    "@deepseek-ai/dsh-credentials": "^0.1.5-rc.2",
-    "@deepseek-ai/dsh-settings": "^0.1.5-rc.2",
-    "@deepseek-ai/dsh-subprocess": "^0.1.5-rc.2",
-    "@deepseek-ai/dsh-client-connection": "^0.1.5-rc.2"
+    "@deepseek-ai/cordis-plugin-loader": "^4.0.2",
+    "@deepseek-ai/dsh-client-connection": "workspace:*",
+    "@deepseek-ai/dsh-client-locale": "workspace:*",
+    "@deepseek-ai/dsh-client-ui-settings": "workspace:*",
+    "@deepseek-ai/dsh-home-paths": "workspace:*",
+    "@deepseek-ai/dsh-host-webserver": "workspace:*",
+    "@deepseek-ai/dsh-settings": "workspace:*",
+    "@deepseek-ai/dsh-subprocess": "workspace:*",
+    "@deepseek-ai/schemastery": "^3.18.2"
   },
-  "devDependencies": { "...": "同上，用于本地类型解析" }
+  "devDependencies": { "...": "同上，用 link: 指向本机的 DSH checkout，用于本地类型解析" }
 }
 ```
 
 依赖声明遵守 DSH 对树外插件的规则：**一律 peer + dev，绝不写 `dependencies`**。profile 的 pnpm 是 `nodeLinker: hoisted` + `autoInstallPeers: false`，peer 会通过 `$DSH_HOME/profiles/node_modules` 这个 repaired fallback 落到 dsh 安装自身的副本上。写成 `dependencies` 会拉进第二份实例，导致服务身份不一致。
 
-`@deepseek-ai/dsh-client-connection` 出现在 peer 里有两个原因：一是覆盖行时按包名解析更稳，二是插件与它的行 `id` 与配置字段存在版本耦合，需要显式约束范围（见下）。
+**`@deepseek-ai/dsh*` 的 peer 一律写 `workspace:*`。** 0.2 起 `dsh` 在装载 profile 前会跑一道兼容门（`evaluatePluginCompatibility`）：它把 `workspace:^`、`workspace:~`、`workspace:*` 三种协议统一替换成**运行版本**再判 semver。于是：
+
+- 写 `^0.1.6-alpha.2` 这种固定范围，会在升到 `0.2.1-alpha.1` 时把整个包判成不兼容——bundle 被跳过，隧道根本不会起来，中继上每个请求都回 502，而日志里只有一行 `skipping profile bundle`。`includePrerelease` 救不了它。
+- 写 `workspace:*` 等于"跟运行中的 dsh 同版本"，这是仓库内 200 多个包的通行写法，也是唯一不需要每次升级都改的地方。
+
+`@deepseek-ai/cordis`、`@deepseek-ai/cordis-plugin-loader`、`@deepseek-ai/schemastery` 不匹配 `@deepseek-ai/dsh*`，不受这道门检查，保持普通版本范围。
+
+树外包声明 `workspace:*` 是成立的：pnpm 只在 workspace 里解析这个协议，而 profile 是 workspace 根（有 `pnpm-workspace.yaml`）、插件是被 `link:` 进来的成员，协议本身会被接受。仓库自身的 `scripts/check-workspace-constraints.ts` 同样要求 `@deepseek-ai/dsh*` 必须是 `workspace:*`。
+
+想临时放行一个已知不兼容的版本，还有一条不改包的路：`dsh plugin --profile web allow-version dsh-web-relay@0.1.0 --dsh-version 0.2.1-alpha.1 --accept-risk`（写进 profile 的 `compatibility.json`）。它是**逐精确版本**的豁免，升级后会自动失效——所以只适合临时排查，不适合当长期方案。
 
 ## 浏览器半边如何被发现
 
@@ -172,4 +184,4 @@ dsh plugin --profile web remove dsh-web-relay               # 卸载
 
 - 安装只改 profile 的 bundle 列表与依赖，不碰 DSH 源码；插件的两行 patch 随 bundle 层生效。
 - 卸载会移除行与浏览器名册条目，但**不会**回滚中继上的改动（`relay` 账号、`sshd` 片段、Caddyfile、证书）。中继侧清理步骤见 [operations.md](operations.md)，插件不去清理别人的机器。
-- 升级时对照 [operations.md](operations.md) 的"升级 DSH"两件事。插件自身用 peer 依赖的版本范围约束 `dsh-host-webserver` / `dsh-credentials` / `dsh-settings` / `dsh-subprocess` / `dsh-client-connection`，但版本范围只能保证"装的是兼容版本"，不能保证"配置 key 没变"。
+- 升级时对照 [operations.md](operations.md) 的"升级 DSH"两件事。插件的 peer 用 `workspace:*` 跟随运行版本，这道兼容门因此只会拦"包被跳过了"这一类明显问题；它**不**保证"配置 key 没变"——升级后仍要按 [operations.md](operations.md) 走一遍核对。

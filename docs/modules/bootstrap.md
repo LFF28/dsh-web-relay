@@ -7,7 +7,7 @@
 | 时机 | 行为 |
 | --- | --- |
 | 用户在设置 ▸ 远程访问页点一次「部署」 | 把表单值一次性写进 `web-relay`，跑一次完整引导（第 0–13 步） |
-| `$DSH_HOME/settings.yaml` 被改成不同的值 | 走同一条提交路径：任何一次真实的文档变更都跑一次完整引导，手工编辑与点部署等效 |
+| profile 补丁里的 `deployment` 被改成不同的值 | 走同一条提交路径：任何一次真实的 volatile 提交都跑一次完整引导，手工编辑与点部署等效 |
 | 启动 profile，且「随 DSH 启动自动部署」打开（`deploy.autoDeploy`）、上次部署成功（记录 `state === 'ready'`） | 自动跑一次完整引导，与点部署完全一样（第 0–13 步）；一次启动最多跑一次，引导失败就停在失败上，不重试 |
 | 启动 profile，且开关关着或记录不是 `ready`（从未部署成功，包括上次部署失败） | **不部署、不起隧道**：只把当前权威注册进 Host/Origin 围栏，再补一次回环自检（从 `127.0.0.1` 打一次 `/api`，期望 401）并打一行结论；公网入口返回中继那行"隧道未连接"的 502 |
 | `Deployment` 不齐全（缺少 `vps.host` 或 `gateway.password`） | 不引导，记录显示等待配置 |
@@ -43,7 +43,7 @@
 
 ## 步骤
 
-每一步都有 id、标题、状态（`ok` / `failed` / `skipped`）与一段原文摘要，写进 `web-relay-record.steps`。任何一步硬失败即停止本次引导，记录 `state: 'failed'`。
+每一步都有 id、标题、状态（`ok` / `failed` / `skipped`）与一段原文摘要，写进运行记录的 `steps`。任何一步硬失败即停止本次引导，记录 `state: 'failed'`。
 
 | # | 步骤 | 幂等依据 | 失败后果 |
 | --- | --- | --- | --- |
@@ -177,9 +177,9 @@ Caddy 的本地 CA 在配置装载时就生成，根证书在 `/var/lib/caddy/.l
 
 | 材料 | 传输方式 | 落盘位置 |
 | --- | --- | --- |
-| `gateway.password` | `caddy hash-password` 的 stdin | 只在 `settings.yaml`（`0600`）；中继上只有 bcrypt 哈希 |
+| `gateway.password` | `caddy hash-password` 的 stdin | 只在 profile 补丁（`0600`）；中继上只有 bcrypt 哈希 |
 | 中继私钥 | 不传输（生成在本机） | `$DSH_HOME/dsh-web-relay/ssh/`（`0600`） |
 | 中继公钥、端口、模板文本 | 脚本 stdin 或 argv | 中继上的托管块 |
-| `gateway.sessionSecret` | 由插件生成 | `settings.yaml` 的记录命名空间（`0600`） |
+| `gateway.sessionSecret` | 由插件生成 | `$DSH_HOME/dsh-web-relay/record.json`（`0600`）；不出网 |
 
 日志是 `scrubbedParentEnv` 之下的子进程 stderr 有界收集加上插件自己的日志行，两者都不含 `gateway.password`；脚本模板里也不含，所以即使日志级别被调高也不会漏。管理登录走密钥，插件手里没有可以漏的管理口令。

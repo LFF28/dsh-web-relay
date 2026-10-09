@@ -1,17 +1,26 @@
 /**
- * 三份配置的 schema。
+ * 插件配置的 schema：包内行为旋钮 + 用户填的部署参数。
  *
- * 它们写入者、生命周期与保密级别都不同，所以刻意不合并：
+ * 两者写在同一个 `Config` 里，但生命周期不同：
  *
- * - `RelayConfig` 是包内的行为旋钮，随 `cordis.patch.yml` 发布，全部带默认值。
- * - `web-relay` 是用户填的部署参数，落盘在 `$DSH_HOME/settings.yaml`（`0600`）。
- * - `web-relay-record` 是插件写的运行记录，用户只读。
+ * - 旋钮（`logLabel`、`tunnel`、`bootstrap`、`entry`、`selfCheck`）随
+ *   `cordis.patch.yml` 发布，改了要重挂载，只由包作者动。
+ * - `deployment` 是用户在设置页里填的部署参数，**整棵子树标了 volatile**：提交后就地
+ *   换值、不重挂载，所以「点一次部署」不会把插件连同已经起来的隧道一起拆掉重建。
+ *
+ * 子树整体标 volatile 而不是逐字段标，是因为这两条约束合起来只剩这一个写法：
+ * schemastery 拒绝 volatile 里再套 volatile，而 `SettingsForms.write` 只接受
+ * volatile 路径。
+ *
+ * 运行记录**不在**这里：它是插件写的、体量随引导步骤增长的宿主状态，走插件自己的
+ * `/api/web-relay.record` 通道，见 `record.ts`。
  *
  * 每一个字段都用 `.required()` 或 `.default(...)` 显式表态，不依赖 schema 库对
  * 「没写就是可选」的隐式约定。
  * @module dsh-web-relay/config
  */
 
+import type { Volatile } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { isBareAuthority } from './authority.js'
 
@@ -53,6 +62,11 @@ export interface RelayConfig {
     /** 自检请求超时。 */
     probeTimeoutMs?: number
   }
+  /**
+   * 用户填的部署参数。整棵子树是 volatile 的，因此设置页可以在不重挂载插件的前提下
+   * 编辑它。
+   */
+  deployment?: Volatile<DeploymentConfig>
 }
 
 /** {@link RelayConfig} 的 schema。 */
@@ -86,15 +100,6 @@ const EntryConfigSchema: z<NonNullable<RelayConfig['entry']>> = z.object({
 const SelfCheckConfigSchema: z<NonNullable<RelayConfig['selfCheck']>> = z.object({
   publicProbe: z.boolean().default(true),
   probeTimeoutMs: z.natural().min(1).default(5000),
-})
-
-/** {@link RelayConfig} 的 schema。 */
-export const Config: z<RelayConfig> = z.object({
-  logLabel: z.string().default('dsh-web-relay'),
-  tunnel: TunnelConfigSchema.default({}),
-  bootstrap: BootstrapConfigSchema.default({}),
-  entry: EntryConfigSchema.default({}),
-  selfCheck: SelfCheckConfigSchema.default({}),
 })
 
 /** 用户在设置页里填的部署参数。 */
@@ -168,94 +173,27 @@ export const Deployment: z<DeploymentConfig> = z.object({
   deploy: DeployRequestSchema.default({}),
 })
 
-/** 引导一步的结果。 */
-export interface BootstrapStep {
-  /** 步骤 id，与 `docs/modules/bootstrap.md` 的编号一致。 */
-  id: string
-  /** 步骤标题。 */
-  title: string
-  /** `ok` 完成、`failed` 硬失败、`skipped` 因前一步失败而未执行。 */
-  status: 'ok' | 'failed' | 'skipped'
-  /** 一句话说明；失败时带远程命令的原文摘要。 */
-  detail: string
-}
-
-/** 插件写给设置页看的运行记录。 */
-export interface RecordConfig {
-  /** 引导与隧道的合并状态。 */
-  state?: 'unconfigured' | 'bootstrapping' | 'ready' | 'failed'
-  /** 最近一次记录更新的 ISO 时间。 */
-  updatedAt?: string
-  /** 已生效的权威；空字符串表示尚未生效。 */
-  publicAuthority?: string
-  /** 首次连接时实地观察到（或按固定值校验通过）的中继主机公钥指纹。 */
-  observedHostKeyFingerprint?: string
-  /** 中继 CA 根证书的 `SHA256:…` 指纹。 */
-  caFingerprint?: string
-  /**
-   * 中继 CA 根证书的 PEM 全文，供设置页存成本地文件。
-   *
-   * 它只有公钥材料，本来就要装到设备上，所以刻意**不**声明 `role('secret')`：要
-   * 原样骑到 describe 响应上，设置页才有东西可下载。约 810 字节 base64。读取它的
-   * 页面前提是已经过了网关口令与 DSH 认证，而且这个标签页只在 loopback 上注册。
-   */
-  caPem?: string
-  /** 网关。 */
-  gateway?: {
-    /** 网关会话 Cookie 的比对值；`gateway.password` 每次变化时重新生成。 */
-    sessionSecret?: string
-  }
-  /** 最近一次引导的逐步结果。 */
-  steps?: BootstrapStep[]
-  /** 最近一次失败的原文摘要，成功时为空。 */
-  lastError?: string
-  /** 最近一次转发前预检的结果。 */
-  lastPreflight?: {
-    /** `free` 空闲、`released` 清掉了残留、`skipped` 预检没跑成、`refused` 被占但不是本部署的残留。 */
-    outcome: 'free' | 'released' | 'skipped' | 'refused'
-    /** `skipped` 与 `refused` 的原因原文。 */
-    message: string
-  }
-}
-
-/** {@link RecordConfig} 的 schema。 */
-const RecordGatewaySchema: z<NonNullable<RecordConfig['gateway']>> = z.object({
-  sessionSecret: z.string().role('secret').default(''),
-})
-
-const RecordPreflightSchema: z<NonNullable<RecordConfig['lastPreflight']>> = z.object({
-  outcome: z.union([
-    z.const('free'), z.const('released'), z.const('skipped'), z.const('refused'),
-  ]).required(),
-  message: z.string().default(''),
-})
-
-/** {@link RecordConfig} 的 schema。 */
-export const Record: z<RecordConfig> = z.object({
-  state: z.union([
-    z.const('unconfigured'), z.const('bootstrapping'), z.const('ready'), z.const('failed'),
-  ]).default('unconfigured'),
-  updatedAt: z.string().default(''),
-  publicAuthority: z.string().default(''),
-  observedHostKeyFingerprint: z.string().default(''),
-  caFingerprint: z.string().default(''),
-  caPem: z.string().default(''),
-  gateway: RecordGatewaySchema.default({}),
-  steps: z.array(z.object({
-    id: z.string().required(),
-    title: z.string().required(),
-    status: z.union([z.const('ok'), z.const('failed'), z.const('skipped')]).required(),
-    detail: z.string().required(),
-  })).default([]),
-  lastError: z.string().default(''),
-  lastPreflight: RecordPreflightSchema.default({ outcome: 'free', message: '' }),
-  tunnelState: z.union([
-    z.const('stopped'), z.const('starting'), z.const('running'), z.const('backing-off'),
-  ]).default('stopped'),
+/**
+ * {@link RelayConfig} 的 schema。
+ *
+ * 刻意**不**标注 `z<RelayConfig>`：`deployment` 是 volatile 的，schema 的输出类型
+ * 是 `Volatile<DeploymentConfig>` 而不是 `DeploymentConfig`，两者对不上。仓库里
+ * 另外两个带 volatile 字段的插件（`ui-theme`、`llm-pi-ai`）同样不标这个注解。
+ *
+ * `deployment` 的 `.volatile()` 标在整棵子树上：提交后 Loader 会把新值写进运行中
+ * fiber 的这一个引用，并派发 `loader/volatile-update`，插件据此重跑部署。
+ */
+export const Config = z.object({
+  logLabel: z.string().default('dsh-web-relay'),
+  tunnel: TunnelConfigSchema.default({}),
+  bootstrap: BootstrapConfigSchema.default({}),
+  entry: EntryConfigSchema.default({}),
+  selfCheck: SelfCheckConfigSchema.default({}),
+  deployment: Deployment.default({}).volatile(),
 })
 
 /**
- * `web-relay` 命名空间的交叉字段约束。
+ * `deployment` 的交叉字段约束。
  *
  * 两条都在写入时拒绝，而不是存下一个会让围栏在运行期拒绝、或者让引导跑到一半才
  * 发现缺东西的值：
@@ -263,6 +201,9 @@ export const Record: z<RecordConfig> = z.object({
  * - `vps.host` 形状非法时的表现是「手机打开是 403」，而用户手上没有任何线索指向
  *   那个多余的路径或空白。
  * - 填了地址却没有口令时配不出网关，引导会以一份空哈希结束。
+ *
+ * 挂载点是 `internal/config` 瀑布：volatile 提交与 `configEditor.edit` 都会先跑
+ * 它，所以设置页写入与手工改 profile 补丁走的是同一条校验。
  * @param value - 待写入的整节。
  * @throws {Error} 地址非空且不是裸的规范权威，或地址非空而口令为空时。
  */

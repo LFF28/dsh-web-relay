@@ -12,6 +12,12 @@
     trustedHosts: !!js ctx.webRuntime.trustedHosts.concat(ctx.webRelay.trustedHosts)
 
 # 第二段插入本插件自己的行。`insert` 没有 id，因此它被追加到组合列表末尾。
+#
+# 这一行刻意不带 `config`：patch 的 `config` 是**整体替换**而不是深合并
+# （`vendor/include/src/index.ts` 的 `target[key] = value`），而设置页写部署参数时
+# 会往 profile 层写同一行的 `config`。两个地方都写就等于谁后生效谁说了算，所以这一行
+# 的配置只由 profile 层拥有。SSH 压缩因此写在 profile 的补丁里，见
+# `docs/configuration.md` 的「SSH 压缩」一节。
 - insert:
     - id: web-relay
       name: dsh-web-relay

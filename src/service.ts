@@ -18,6 +18,7 @@ import { isRunnable, type Deployment } from './deployment.js'
 import { registerEntryRoute } from './entry.js'
 import { caCert, knownHosts, relayPrivateKey, relayPublicKey, relayRoot, sshDir } from './paths.js'
 import { Preflight, type PreflightOutcome } from './preflight.js'
+import { readRecord, recordView, writeRecord, type RecordConfig, type RecordView } from './record.js'
 import { adminTarget, commandArgv, firstLine, privilegedCommand, runSsh } from './ssh.js'
 import { RelaySettings } from './settings.js'
 import { Trust } from './trust.js'
@@ -64,6 +65,14 @@ export interface WebRelayHandle {
    * @returns 一份快照。
    */
   status(): RelayStatus
+  /**
+   * 当前运行记录的浏览器视图。
+   *
+   * 走服务面而不是让路由直接读文件：内存里那一份才是权威，刚写完的记录立刻可见，
+   * 不需要等一次磁盘往返。
+   * @returns 剔除敏感字段后的记录。
+   */
+  record(): RecordView
 }
 
 /** 运行期的依赖。 */
@@ -103,6 +112,16 @@ export class RelayRuntime {
   #lastPreflight: PreflightOutcome | undefined
   /** 网关会话密钥。 */
   #sessionSecret = ''
+  /**
+   * 内存里的记录副本。
+   *
+   * 记录同时落盘（`record.json`），但读路径不走文件：设置页每次打开都会取一次，
+   * 隧道状态变化时也写一次，全部走磁盘既慢又会让"刚写进去的值"与"读出来的值"
+   * 之间出现一个窗口。文件只用于跨重启恢复。
+   */
+  #record: RecordConfig = {}
+  /** 部署串行队列；见 {@link RelayRuntime.deploy}。 */
+  #queue: Promise<void> = Promise.resolve()
 
   /**
    * @param deps - 运行期依赖。
@@ -138,7 +157,7 @@ export class RelayRuntime {
       dshPort: () => deps.webServer.port,
       beforeConnect: async (deployment, signal) => {
         this.#lastPreflight = await this.#preflight.run(deployment, config.relayPort, signal)
-        await this.#settings.patchRecord({ lastPreflight: this.#lastPreflight })
+        await this.#patchRecord({ lastPreflight: this.#lastPreflight })
       },
       onState: (state) => { this.#onTunnelState(state) },
     })
@@ -169,6 +188,7 @@ export class RelayRuntime {
       },
       authority: () => thisAuthorityOf(settingsFacade),
       status: () => this.#status(),
+      record: () => recordView(this.#record),
     }
   }
 
@@ -181,13 +201,34 @@ export class RelayRuntime {
    */
   async start(): Promise<void> {
     await mkdir(sshDir(), { recursive: true, mode: 0o700 })
+    this.#record = await readRecord()
     this.#sessionSecret = await this.#ensureSessionSecret()
-    const raw = this.#settings.record()
-    this.#state = raw.state ?? 'unconfigured'
-    this.#lastError = raw.lastError ?? ''
-    this.#lastPreflight = raw.lastPreflight
-    this.#settings.watch(() => this.#deploy())
+    this.#state = this.#record.state ?? 'unconfigured'
+    this.#lastError = this.#record.lastError ?? ''
+    this.#lastPreflight = this.#record.lastPreflight
+    // `tunnelState` 描述的是一个**活着的子进程**，而子进程从不跨重启存活：上一次
+    // 运行留下 `running` 时，这个进程里其实一条隧道都没有。启动时因此无条件把它按
+    // 事实写成 `stopped`——不写的话，设置页会一直显示"已连接"，而公网入口回的是
+    // 502，两者互相矛盾且都以状态区为准。
+    if (this.#record.tunnelState !== undefined && this.#record.tunnelState !== 'stopped') {
+      await this.#patchRecord({ tunnelState: 'stopped' })
+    }
     void this.#restore()
+  }
+
+  /**
+   * 请求一次部署。
+   *
+   * 触发点是 `loader/volatile-update`：用户在设置页点一次部署就是一次 volatile 提交，
+   * 之后 `deployment` 引用里已经是新值，这里直接读它就够了。
+   *
+   * 调用**串行排队**：提交可能连着来，而两次引导同时在同一条隧道上动手会互相拆台。
+   * 排队的是整个部署而不是每个步骤，所以后一次提交看到的一定是前一次跑完之后的世界。
+   * @returns 落定于本次部署结束。
+   */
+  deploy(): Promise<void> {
+    this.#queue = this.#queue.then(() => this.#deploy(), () => this.#deploy())
+    return this.#queue
   }
 
   /**
@@ -205,7 +246,7 @@ export class RelayRuntime {
   async #restore(): Promise<void> {
     const deployment = this.#settings.deployment()
     this.#trust.apply()
-    if (this.#settings.record().state === 'ready' && deployment.autoDeploy) {
+    if (this.#record.state === 'ready' && deployment.autoDeploy) {
       this.deps.logger.info('%s 已打开随启动自动部署，开始自动部署', this.deps.config.logLabel)
       try {
         await this.#deploy()
@@ -226,9 +267,9 @@ export class RelayRuntime {
   /**
    * 一次部署：按当前设置跑完整引导。
    *
-   * 只有两条路会走到这里——用户在设置页点了部署，或者设置文档被改成了另一个值
-   * （手工编辑 `settings.yaml` 与点部署等效）。设置服务的观察者按提交顺序串行调用
-   * 并等待返回值，所以两次部署天然不会并发。
+   * 只有 `loader/volatile-update` 会走到这里——用户在设置页点一次部署、或者手工改
+   * profile 补丁里的 `deployment`，都是同一次 volatile 提交，因此两条路等效。
+   * 调用方是 {@link RelayRuntime.deploy} 的串行队列，所以两次部署不会并发。
    * @returns 落定于本次引导结束。
    */
   async #deploy(): Promise<void> {
@@ -236,9 +277,7 @@ export class RelayRuntime {
     if (!isRunnable(deployment)) {
       await this.#tunnel.stop()
       this.#state = 'unconfigured'
-      await this.#settings.patchRecord({
-        state: 'unconfigured', publicAuthority: '', updatedAt: new Date().toISOString(),
-      })
+      await this.#patchRecord({ state: 'unconfigured', publicAuthority: '' })
       return
     }
     await this.#doBootstrap(deployment)
@@ -253,8 +292,8 @@ export class RelayRuntime {
     this.#state = 'bootstrapping'
     this.#lastError = ''
     const log = new StepLog()
-    await this.#settings.patchRecord({
-      state: 'bootstrapping', steps: [], lastError: '', updatedAt: new Date().toISOString(),
+    await this.#patchRecord({
+      state: 'bootstrapping', steps: [], lastError: '',
     })
     this.deps.logger.info('%s 开始引导 %s@%s', label, deployment.user, deployment.host)
 
@@ -264,12 +303,11 @@ export class RelayRuntime {
       log.skipAfter(lastStepId(log), outcome.error ?? '引导失败')
       this.#state = 'failed'
       this.#lastError = outcome.error ?? '引导失败'
-      await this.#settings.patchRecord({
+      await this.#patchRecord({
         state: 'failed',
         steps: [...log.steps],
         lastError: this.#lastError,
         observedHostKeyFingerprint: outcome.hostKeyFingerprint,
-        updatedAt: new Date().toISOString(),
       })
       this.deps.logger.error('%s 引导失败：%s', label, this.#lastError)
       return
@@ -305,7 +343,7 @@ export class RelayRuntime {
     const caFingerprint = outcome.caFingerprint
     this.#state = selfCheck.ok && healthy && publicOk ? 'ready' : 'failed'
     this.#lastError = this.#state === 'ready' ? '' : selfCheck.ok ? (healthy ? publicCheck : '隧道未连接') : selfCheck.detail
-    await this.#settings.patchRecord({
+    await this.#patchRecord({
       state: this.#state,
       publicAuthority: authority,
       observedHostKeyFingerprint: outcome.hostKeyFingerprint,
@@ -314,7 +352,6 @@ export class RelayRuntime {
       gateway: { sessionSecret: this.#sessionSecret },
       steps: [...log.steps],
       lastError: this.#lastError,
-      updatedAt: new Date().toISOString(),
     })
     this.#banner(deployment, caFingerprint, outcome.caddyVersion)
   }
@@ -387,10 +424,28 @@ export class RelayRuntime {
 
   /** 隧道状态变化时写回记录，供设置页显示。 */
   #onTunnelState(state: TunnelState): void {
-    void this.#settings.patchRecord({ tunnelState: state }).catch((error: unknown) => {
+    void this.#patchRecord({ tunnelState: state }).catch((error: unknown) => {
       this.deps.logger.warn('%s 写入隧道状态失败：%s', this.deps.config.logLabel, describeError(error))
     })
     this.deps.logger.info('%s 隧道状态：%s', this.deps.config.logLabel, state)
+  }
+
+  /**
+   * 合并式写入记录。
+   *
+   * 内存副本先落定、再落盘：设置页读的是内存那一份，所以即使磁盘写失败，界面显示
+   * 的也仍是刚刚发生的真实状态。写失败只记一行日志——记录是观测结果，它写不下去
+   * 不该让一次正在进行的引导失败。
+   * @param patch - 要覆盖的字段。
+   * @returns 落定于落盘尝试结束。
+   */
+  async #patchRecord(patch: RecordConfig): Promise<void> {
+    this.#record = { ...this.#record, ...patch, updatedAt: new Date().toISOString() }
+    try {
+      await writeRecord(patch, this.#record)
+    } catch (error) {
+      this.deps.logger.warn('%s 运行记录落盘失败：%s', this.deps.config.logLabel, describeError(error))
+    }
   }
 
   /**
@@ -399,10 +454,10 @@ export class RelayRuntime {
    * @returns 会话密钥。
    */
   async #ensureSessionSecret(regenerate = false): Promise<string> {
-    const existing = this.#settings.record().gateway?.sessionSecret ?? ''
+    const existing = this.#record.gateway?.sessionSecret ?? ''
     if (!regenerate && existing !== '') return existing
     const secret = randomBytes(24).toString('base64url')
-    await this.#settings.patchRecord({ gateway: { sessionSecret: secret } })
+    await this.#patchRecord({ gateway: { sessionSecret: secret } })
     return secret
   }
 

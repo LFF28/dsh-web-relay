@@ -7,9 +7,9 @@
 | 观测点 | 位置 | 内容 |
 | --- | --- | --- |
 | 设置页状态区 | 服务器本机浏览器 | 引导状态、权威、访问地址、CA 指纹、逐步引导结果、最近一次错误、最近一次转发前预检 |
-| 启动横幅 | 内网主机 `dsh web` 终端 stdout | `dsh-web-relay: https://…/` 一行与 CA 指纹；其余状态在 harness 日志与 `web-relay-record` 记录里 |
+| 启动横幅 | 内网主机 `dsh web` 终端 stdout | `dsh-web-relay: https://…/` 一行与 CA 指纹；其余状态在 harness 日志与运行记录里 |
 | 隧道日志 | 内网主机 `dsh web` 终端 | `ssh` 进程每次退出的退出码与 stderr 摘要 |
-| 隧道状态 | 记录 `web-relay-record` 的 `tunnelState`（设置页）与 `ctx.webRelay.status()`（宿主） | `stopped` / `starting` / `running` / `backing-off`；`status()` 另带 `tunnelUptimeMs` 与 `lastPreflight` |
+| 隧道状态 | 运行记录的 `tunnelState`（设置页）与 `ctx.webRelay.status()`（宿主） | `stopped` / `starting` / `running` / `backing-off`；`status()` 另带 `tunnelUptimeMs` 与 `lastPreflight` |
 | 引导步骤结果 | 记录的 `steps` | 每步 `ok` / `failed` / `skipped` 与一句话说明；第 13 步的 detail 另带 `中继对外监听：…` |
 | 访问日志 | 中继 `/var/log/caddy/dsh-relay-access.log`（`0600`，`roll_size 20MiB`，`roll_keep 5`） | JSON 单行；`remote_ip`、状态码、耗时；查询串里的 `key`/`token` 已打码，Cookie 默认打码 |
 | 认证失败 | 同上 | 401 覆盖 Caddy 的 `basic_auth` 失败与 DSH 的 Cookie 失败；只有前者带 `Www-Authenticate`，DSH 的 401 是首访的正常现象 |
@@ -46,6 +46,7 @@
 | 中继上出现了 `gateway.port` 之外的 HTTP 监听 | 发行版 Caddy 包自带的 `/etc/caddy/Caddyfile` 里的 `:80` 站点，或别的服务后来被装上来了（多一条读到会话 Cookie 的路） | 中继 `ss -ltnp` 与第 13 步记录的 `中继对外监听：…`；发行版自带的 `:80` 块由操作者从 `/etc/caddy/Caddyfile` 删除后 `caddy reload`，别的服务能用别的方式提供就撤掉端口，否则必须接受这条风险 |
 | `curl -L` 打开裸地址时重定向绕个不停 | curl 默认不保存 Cookie，每次请求都是"没有 DSH Cookie"的首访，于是又被送进换票点 | 加 `-c/-b <文件>` 让 curl 收下 Cookie；浏览器不存在这个问题（它会存 Cookie） |
 | 页面能开但对话不刷新 | 长连接被中间设备或 `stream_timeout` 切断 | 中继访问日志里该连接的耗时；`stream_timeout` 已设为 24h，运营商也会切断空闲连接，DSH 客户端会重连 |
+| **手机上每点一次会话就"重新连接"一次** | 心跳预算不够用一个会话快照的排空时间：DSH 的 `websocketHeartbeatIntervalMs` 默认 2000 ms、`MAX_MISSED_HEARTBEATS` 是 2，于是 pong 预算约 **4 s**；而一个会话快照实测 2.89 MB，在中继到手机那条约 0.35 MB/s 的出口上要排 **约 8 s**，ping 因此超时、`socket.terminate()` 把整条 mux 拆掉 | 这是**已知**的、超出本插件范围的问题：真因在 DSH 的心跳参数与快照体积（`assistant/message.data.stream` 占 74%，且与 `message.content` 逐字重复）。SSH 压缩与 Caddy 都不是它的解——压缩只作用在本机到中继那条快腿。完整算术与实测数据见 [settings.md](settings.md) 的「传输与心跳」 |
 
 **一条通用原则**：403 与 401 的区分是最有用的信号。403 永远是权威问题，401 永远是凭据问题。这个区分来自 DSH 自身的设计，本插件只是把它在启动时主动暴露出来。
 
@@ -65,7 +66,7 @@
 
 ### 改部署参数（本机页面）
 
-在设置页改字段、点「部署」（字段与取值见 [configuration.md](../configuration.md)）。这一次写入把表单值一次性写进 `web-relay` 设置文档（同一次原子写入里带上递增的部署计数），宿主观察到这次提交就在中继上完整重跑一遍引导（第 0–13 步），不再有"改了哪一半就重做哪一半"这套差异逻辑。手工编辑 `$DSH_HOME/settings.yaml` 与点部署等效——文件被改动会走同一条提交路径，同样触发一遍完整引导（见 [settings.md](settings.md)），两条路都**不需要重启 `dsh web`**。
+在设置页改字段、点「部署」（字段与取值见 [configuration.md](../configuration.md)）。这一次写入把表单值一次性写进插件 `Config` 的 `deployment` 子树（同一次原子写入里带上递增的部署计数），Loader 提交这次 volatile 变更后就在中继上完整重跑一遍引导（第 0–13 步），不再有"改了哪一半就重做哪一半"这套差异逻辑。手工编辑 profile 补丁里的 `deployment` 与点部署等效——都会走同一条提交路径，同样触发一遍完整引导（见 [settings.md](settings.md)），两条路都**不需要重启 `dsh web`**。
 
 ### 换网关口令
 
@@ -172,5 +173,10 @@ userdel -r relay
 | 会话 Cookie | 30 天（DSH 默认） | 改 `connection` 行的 `cookieMaxAgeDays` 可调整 |
 | 中继证书有效期 | 90 天（Caddy 内置签发者，插件显式覆盖） | 自动续签 |
 | 长连接上限 | 24h（`stream_timeout`） | 到期后客户端重连 |
+| 本机 → 中继 带宽 | 实测约 3.3 MB/s | 开 `-C` 后 3.69 MB 的传输从 1.275s 降到 0.518s 量级 |
+| 中继 → 手机 带宽 | 实测约 0.35 MB/s | 5 MB/13.8s、3.7 MB/10.5s、3.0 MB/8.5s。**这条腿才是瓶颈** |
+| mux 心跳 pong 预算 | 约 4s（`websocketHeartbeatIntervalMs` 2000 × `MAX_MISSED_HEARTBEATS` 2） | 小于一个会话快照（2.89 MB）的排空时间，是"点会话就重连"的直接原因，见 [settings.md](settings.md) 的「传输与心跳」 |
 
 单用户场景下这些值都不需要调优；它们的作用是让异常（重连风暴、爆破）有一个已知的上界。
+
+**唯一需要留意的是心跳那一行**：它不是"配置得偏紧"，而是当前的快照体积在慢腿上一次排不完。要真正消除"点会话就重连"，得在 DSH 侧调大 `websocketHeartbeatIntervalMs`（`typert-gateway` 行的配置）或减小快照体积；本插件不改这两者，理由与实测数据见 [settings.md](settings.md) 的「传输与心跳」。

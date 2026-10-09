@@ -13,7 +13,7 @@
 import { access, constants, chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { delimiter, dirname, join } from 'node:path'
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
-import type { BootstrapStep } from './config.js'
+import type { BootstrapStep } from './record.js'
 import type { Deployment } from './deployment.js'
 import { commandArgv, egressAddress, firstLine, parseFingerprints, preferredFingerprint, runSsh, shellQuote, type HostKeyFingerprint, type SshRunResult, type SshTarget } from './ssh.js'
 import { managedBlockScript, readTemplate, substitute, wholeFileScript, type ManagedFile } from './templates.js'

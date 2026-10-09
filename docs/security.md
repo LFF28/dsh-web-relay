@@ -51,7 +51,7 @@ IP 字面量权威无法使用 HSTS（RFC 6797 明确排除 IP 字面量），�
 
 **这是这条通路上唯一需要你拍板的选项。** 用户有两条路：
 
-- **安装 CA 根证书**（推荐）。根证书只有公钥，可以公开分发。它不经过公网 HTTP 面：引导第 10 步把它取到 `$DSH_HOME/dsh-web-relay/ca/root.crt`，也可在设置页状态区点「下载根证书」存成本地文件（那份 PEM 存在 `web-relay-record` 的 `caPem` 里；读它要先过网关口令与 DSH 认证，而这个标签页只在 loopback 页面上注册），再经本地复制、AirDrop、聊天软件等不依赖 TLS 信任的渠道送到设备；设置页与记录里的 `caFingerprint` 是核对它的 SHA256 指纹，可与 VPS 上 `data/pki/authorities/dsh-relay/root.crt` 逐字核对。iOS 上要先装描述文件，再到 设置 ▸ 通用 ▸ 关于本机 ▸ 证书信任设置 里手动开启完全信任。
+- **安装 CA 根证书**（推荐）。根证书只有公钥，可以公开分发。它不经过公网 HTTP 面：引导第 10 步把它取到 `$DSH_HOME/dsh-web-relay/ca/root.crt`，也可在设置页状态区点「下载根证书」存成本地文件（那份 PEM 存在运行记录的 `caPem` 里；读它要先过网关口令与 DSH 认证，而这个标签页只在 loopback 页面上注册），再经本地复制、AirDrop、聊天软件等不依赖 TLS 信任的渠道送到设备；设置页与记录里的 `caFingerprint` 是核对它的 SHA256 指纹，可与 VPS 上 `data/pki/authorities/dsh-relay/root.crt` 逐字核对。iOS 上要先装描述文件，再到 设置 ▸ 通用 ▸ 关于本机 ▸ 证书信任设置 里手动开启完全信任。
 - **不安装**，每次访问手动点过浏览器的证书警告。这时 TLS 仍然加密流量，但**没有身份验证**：你无法察觉中间人，攻击者只要能劫持到中继 IP 的流量就能读走 Cookie 与口令。这是明确要接受的风险，不是"等价但更省事"的选项。
 
 装好 CA 之前，中间人风险与"完全明文"的差别只在于被动旁听需要主动介入连接；把这一条写在这里，是为了让"不装 CA"是一个被看见的决定。
@@ -94,8 +94,8 @@ Caddy 到 DSH 这一段是 loopback 上的明文 HTTP，Host 原样透传。**�
 
 | 材料 | 位置 | 权限 |
 | --- | --- | --- |
-| 用户的部署参数（含 `gateway.password`） | `$DSH_HOME/settings.yaml` | 文件 `0600`，目录 `0700`；管理登录走密钥，插件不存管理口令 |
-| 插件运行记录（含 `gateway.sessionSecret`） | 同上，命名空间 `web-relay-record` | 同上 |
+| 用户的部署参数（含 `gateway.password`） | profile 的 `cordis.patch.yml` | 文件 `0600`；管理登录走密钥，插件不存管理口令。该文件不在 git 仓库里 |
+| 插件运行记录（含 `gateway.sessionSecret`） | `$DSH_HOME/dsh-web-relay/record.json` | 文件 `0600`，目录 `0700`。`sessionSecret` 不经过记录接口出去：`recordView()` 的白名单把 `gateway` 整节挡下 |
 | 本机专用中继私钥 | `$DSH_HOME/dsh-web-relay/ssh/relay_ed25519` | `0600`，父目录 `0700` |
 | 中继主机公钥记录 | `$DSH_HOME/dsh-web-relay/ssh/known_hosts` | `0600`，只含中继一条 |
 | 中继 CA 根证书副本 | `$DSH_HOME/dsh-web-relay/ca/root.crt` | `0644`（公开信息） |

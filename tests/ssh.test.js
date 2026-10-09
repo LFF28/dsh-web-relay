@@ -7,7 +7,7 @@
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { commandArgv, connectionArgv, egressAddress, parseFingerprints, preferredFingerprint, shellQuote } from '../lib/ssh.js'
+import { adminTarget, commandArgv, connectionArgv, egressAddress, parseFingerprints, preferredFingerprint, shellQuote } from '../lib/ssh.js'
 
 /** 一份连接身份。 */
 const TARGET = {
@@ -67,6 +67,18 @@ test('extraOptions 不能覆盖插件自己的安全选项', () => {
   assert.ok(argv.includes('StrictHostKeyChecking=yes'))
   assert.ok(!argv.includes('StrictHostKeyChecking=no'), '用户提供的同名值被丢弃')
   assert.ok(argv.includes('ServerAliveInterval=30'), '不冲突的选项照常生效')
+})
+
+test('Compression 不在保护名单里，会真的落到 ssh 命令行上', () => {
+  const argv = connectionArgv({ ...TARGET, extraOptions: { Compression: 'yes' } })
+  assert.ok(argv.includes('Compression=yes'), `argv 里没有压缩开关：${argv.join(' ')}`)
+})
+
+test('管理连接永远不吃隧道专用的 extraOptions', () => {
+  // 引导与预检走 adminTarget：给隧道开压缩不该顺手改掉管理动作的行为。
+  const target = adminTarget({ host: 'h', sshPort: 22, user: 'root', identityFile: undefined, hostKeyFingerprint: undefined, gatewayPort: 8443, password: 'p', autoDeploy: false, authority: undefined, hostname: undefined }, '/tmp/kh', 10)
+  const argv = connectionArgv(target)
+  assert.ok(!argv.some(a => a.startsWith('Compression=')))
 })
 
 test('commandArgv 把远程命令收成单独一个参数', () => {
