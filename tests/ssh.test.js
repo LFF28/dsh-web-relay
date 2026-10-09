@@ -7,7 +7,7 @@
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { adminTarget, commandArgv, connectionArgv, egressAddress, parseFingerprints, preferredFingerprint, shellQuote } from '../lib/ssh.js'
+import { adminTarget, commandArgv, connectionArgv, controlPathFits, egressAddress, parseFingerprints, preferredFingerprint, shellQuote } from '../lib/ssh.js'
 
 /** 一份连接身份。 */
 const TARGET = {
@@ -17,6 +17,7 @@ const TARGET = {
   identityFile: undefined,
   knownHostsFile: '/home/me/.dsh-relay/ssh/known_hosts',
   connectTimeoutSec: 10,
+  controlPath: undefined,
   extraOptions: {},
 }
 
@@ -79,6 +80,52 @@ test('管理连接永远不吃隧道专用的 extraOptions', () => {
   const target = adminTarget({ host: 'h', sshPort: 22, user: 'root', identityFile: undefined, hostKeyFingerprint: undefined, gatewayPort: 8443, password: 'p', autoDeploy: false, authority: undefined, hostname: undefined }, '/tmp/kh', 10)
   const argv = connectionArgv(target)
   assert.ok(!argv.some(a => a.startsWith('Compression=')))
+})
+
+test('控制套接字只在给了 ControlPath 时才写进命令行', () => {
+  // 不给就不复用：隧道走这条，它要自己独立管一条连接。
+  const plain = connectionArgv(TARGET)
+  assert.equal(plain.some(a => a.startsWith('ControlMaster=')), false)
+  assert.equal(plain.some(a => a.startsWith('ControlPath=')), false)
+  assert.equal(plain.some(a => a.startsWith('ControlPersist=')), false)
+
+  const shared = connectionArgv({ ...TARGET, controlPath: '/root/ssh/cm/%C' })
+  assert.ok(shared.includes('ControlMaster=auto'))
+  assert.ok(shared.includes('ControlPath=/root/ssh/cm/%C'))
+  assert.ok(shared.includes('ControlPersist=60'), '空闲 60 秒后 master 应自行退出')
+})
+
+test('ControlMaster 选项不能被 extraOptions 改掉', () => {
+  // 这几项与 BatchMode 同级：被外部改掉会让复用行为（以及它的清理语义）失控。
+  const argv = connectionArgv({
+    ...TARGET,
+    controlPath: '/root/ssh/cm/%C',
+    extraOptions: { ControlPath: '/tmp/elsewhere', ControlMaster: 'no', ControlPersist: 'no' },
+  })
+  assert.ok(argv.includes('ControlPath=/root/ssh/cm/%C'), '插件自己的 ControlPath 被覆盖了')
+  assert.ok(argv.includes('ControlMaster=auto'), '插件自己的 ControlMaster 被覆盖了')
+  assert.ok(argv.includes('ControlPersist=60'), '插件自己的 ControlPersist 被覆盖了')
+})
+
+test('管理连接默认复用，且 %C 让不同账号分属不同套接字', () => {
+  const row = {
+    host: '175.178.171.191', sshPort: 22, user: 'ubuntu', identityFile: undefined,
+    hostKeyFingerprint: undefined, gatewayPort: 8443, password: 'p', autoDeploy: false,
+    authority: undefined, hostname: undefined,
+  }
+  const argv = connectionArgv(adminTarget(row, '/tmp/kh', 10))
+  assert.ok(argv.some(a => a.startsWith('ControlPath=')), '管理连接应默认复用')
+  assert.ok(argv.some(a => a.endsWith('/%C')), '%C 是账号隔离的依据，不能被换掉')
+})
+
+test('ControlPath 放不下时退回直连，而不是让所有连接一起失败', () => {
+  // unix 套接字路径上限 108 字节，超了 ssh 在连上之前就拒绝启动。
+  assert.equal(controlPathFits('/short/cm/%C'), true)
+  assert.equal(controlPathFits(`/${'x'.repeat(120)}/%C`), false)
+  // %C 必须按展开后的 40 字符算，否则长路径会被误判成放得下。
+  // `/` + 66 个 x + `/%C` 展开后是 1+66+1+40 = 108，正好触到上限（108 已越界）。
+  assert.equal(controlPathFits(`/${'x'.repeat(66)}/%C`), false)
+  assert.equal(controlPathFits(`/${'x'.repeat(65)}/%C`), true, '107 字节应仍然放得下')
 })
 
 test('commandArgv 把远程命令收成单独一个参数', () => {

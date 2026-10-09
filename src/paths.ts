@@ -60,6 +60,26 @@ export function knownHosts(): string {
 }
 
 /**
+ * 管理连接的 ControlMaster 套接字目录。
+ *
+ * 引导要开十几条短连接（每条一个步骤），而到中继这段路径有丢包，独立握手越多、
+ * 整轮失败率越高。让它们复用一个 master 就把握手从十几次压到一次。
+ *
+ * 目录名取 `cm` 而不是更长的名字是为了**长度预算**：`ControlPath` 是 unix 套接字
+ * 路径，超过 108 字节时 `ssh` 直接拒绝启动（实测报 `ControlPath too long`），而
+ * 中间还要塞一个 40 字符的 `%C` 哈希。`$DSH_HOME` 一旦很长，短目录名就是唯一还
+ * 留有余地的地方。
+ *
+ * 它必须真实存在：目录缺失时 `ssh` 不是回退而是直接以 255 失败（实测
+ * `unix_listener: cannot bind to path …: No such file or directory`），所以创建
+ * 时机与 `sshDir()` 一致，都在启动与每次部署之前。
+ * @returns `<root>/ssh/cm`。
+ */
+export function controlSocketDir(): string {
+  return join(sshDir(), 'cm')
+}
+
+/**
  * 从引导第 10 步取回的中继 CA 根证书所在目录。
  * @returns `<root>/ca`。
  */

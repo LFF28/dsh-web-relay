@@ -16,7 +16,7 @@
 
 ## 命令通道
 
-引导的每一条远程命令都是一次独立的 `ssh` 调用，不复用控制连接、不留 socket。进程用 `ctx.subprocess.spawn` 起，`stdio` 的 stdout/stderr 走有界收集，stdin 按下面三种形态之一提供。
+引导的每一条远程命令都是一次独立的 `ssh` 调用（一个联网步骤一条），但整轮**复用同一条 TCP 连接**（见下方「为什么复用连接」）。进程用 `ctx.subprocess.spawn` 起，`stdio` 的 stdout/stderr 走有界收集，stdin 按下面三种形态之一提供。
 
 所有调用共享的选项：
 
@@ -27,9 +27,31 @@
 -o ConnectTimeout=<bootstrap.connectTimeoutSec>
 -o NumberOfPasswordPrompts=0
 -o LogLevel=ERROR
+-o ControlMaster=auto                       （管理路径；隧道不带这三项）
+-o ControlPath=$DSH_HOME/dsh-web-relay/ssh/cm/%C
+-o ControlPersist=60
 -i <vps.identityFile>            （仅当设置里给了路径）
 -N 之外的每一次调用都是命令模式，不用 -N
 ```
+
+### 为什么复用连接
+
+一次引导要开约 12 条短连接：联网步骤 3–10 各一条，其中第 9 步因为把「预检 Caddy」「落 Caddyfile」「落 fail2ban jail」分成三段而是 3 条；之外还有预检 1–2 条与第 13 步的观测 1 条。步骤 0–2 不上网（本机检查、生成密钥、校验主机密钥）。
+
+原先这些命令各自独立握手，而到中继这段路径实测有 8–20% 的丢包（同一时段对公共 DNS 是 0%，所以不是本机出口的问题）。独立握手越多，整轮失败率越高：单连接失败率 25% 时 12 条全部成功只有约 3%，失败率 12% 时约 22%。这正是失败总停在**随机**步骤的原因，而不是某一步有缺陷。
+
+`ControlMaster=auto` 把整轮收敛到一条 TCP 连接：第一条命令建立 master，其余命令骑同一条。实测复用后单条命令约 36 ms（首次 380 ms），整轮成功率在 25% 丢包下从约 3% 升到约 75%。
+
+几个刻意的取舍：
+
+- **用 `auto` 而不是 `yes`。** 套接字文件还在但 master 已死（进程被 `SIGKILL`）时，`auto` 退回直连，`yes` 直接报错。实测在 `ControlPath` 上放一个假文件，命令仍然成功。
+- **`ControlPersist=60`。** 空闲 60 秒后 master 自行退出并删掉套接字。一次引导的十几条命令集中在几十秒内跑完，60 秒足够覆盖整轮，又不留长期后台进程。实测空闲 60 秒后套接字消失。
+- **用 `%C` 而不是自己拼 `user@host:port`。** `%C` 是「本机、远端、端口、账号」的 40 字符哈希，因此管理账号（`vps.user`）与隧道的 `relay` 账号天然落在两个套接字上，键名里也不含可读的主机名与账号。
+- **套接字目录必须预先存在。** 目录缺失时 `ssh` 不是回退而是直接以 255 失败（`unix_listener: cannot bind to path …: No such file or directory`），所以 `$DSH_HOME/dsh-web-relay/ssh/cm`（`0700`）在启动与每次部署前都会补建。
+- **路径放不下就退回直连。** `ControlPath` 是 unix 套接字路径，`%C` 展开后达到 108 字节时 `ssh` 在连上之前就拒绝启动。`adminTarget` 按展开长度检查，放不下时不带复用选项——复用是优化，直连才是保底。
+- **隧道不共用。** 它是常驻进程，挂在一条为「十几条短命令」设计的 master 上会让隧道重连与管理脚本互相牵连；`relay` 账号本来也会落到另一个 `%C` 上。
+
+`ControlMaster`、`ControlPath`、`ControlPersist` 与 `BatchMode` 同级列入保护选项，`tunnel.extraOptions` 改不掉它们。
 
 **普通脚本。** 命令是 `sh`，脚本全文走 stdin。脚本里只出现非密信息。
 

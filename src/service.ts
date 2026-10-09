@@ -16,7 +16,7 @@ import { Bootstrap, StepLog } from './bootstrap.js'
 import type { ResolvedRelayConfig } from './config.js'
 import { isRunnable, type Deployment } from './deployment.js'
 import { registerEntryRoute } from './entry.js'
-import { caCert, knownHosts, relayPrivateKey, relayPublicKey, relayRoot, sshDir } from './paths.js'
+import { caCert, controlSocketDir, knownHosts, relayPrivateKey, relayPublicKey, relayRoot, sshDir } from './paths.js'
 import { Preflight, type PreflightOutcome } from './preflight.js'
 import { readRecord, recordView, writeRecord, type RecordConfig, type RecordView } from './record.js'
 import { adminTarget, commandArgv, firstLine, privilegedCommand, runSsh } from './ssh.js'
@@ -201,6 +201,11 @@ export class RelayRuntime {
    */
   async start(): Promise<void> {
     await mkdir(sshDir(), { recursive: true, mode: 0o700 })
+    // ControlMaster 的套接字目录必须**先存在**：目录缺失时 `ssh` 不是退回直连，而是
+    // 立刻以 255 失败（`unix_listener: cannot bind to path …: No such file`），
+    // 表现成"所有远程命令一起坏掉"。这里与 `sshDir()` 一起建，权限同为 `0700`——
+    // 套接字本身会让持有者骑上已有的认证会话，不该给别的账号。
+    await mkdir(controlSocketDir(), { recursive: true, mode: 0o700 })
     this.#record = await readRecord()
     this.#sessionSecret = await this.#ensureSessionSecret()
     this.#state = this.#record.state ?? 'unconfigured'
@@ -286,6 +291,10 @@ export class RelayRuntime {
   /** {@link RelayRuntime.#deploy} 的实现；完整引导的第 0–13 步。 */
   async #doBootstrap(deployment: Deployment): Promise<void> {
     const label = this.deps.config.logLabel
+    // 每次部署前补建一次：套接字目录是 `ssh` 的硬前提，而它在两次部署之间可能被
+    // 清理工具删掉（或用户手工删过）。放在这里而不是只在 `start()`，是因为从
+    // `start()` 到用户点「部署」可以隔很久。
+    await mkdir(controlSocketDir(), { recursive: true, mode: 0o700 })
     // 口令必填且浏览器拿不回它，所以每次部署都要重填一次；每一次部署都按"口令变了"
     // 处理：bcrypt 哈希与会话密钥一起换新，旧的网关会话一律失效。
     this.#sessionSecret = await this.#ensureSessionSecret(true)

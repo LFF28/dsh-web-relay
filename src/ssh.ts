@@ -8,6 +8,7 @@
  */
 
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
+import { controlSocketDir } from './paths.js'
 import type { Deployment } from './deployment.js'
 
 /**
@@ -26,6 +27,9 @@ const PROTECTED_OPTIONS = new Set([
   'exitonforwardfailure',
   'identitiesonly',
   'loglevel',
+  'controlmaster',
+  'controlpath',
+  'controlpersist',
 ])
 
 /** 一次连接要用的全部身份与选项。 */
@@ -42,6 +46,14 @@ export interface SshTarget {
   readonly knownHostsFile: string
   /** 连接超时秒数。 */
   readonly connectTimeoutSec: number
+  /**
+   * `ControlPath` 模式（含 `%C`）；`undefined` 表示不复用连接。
+   *
+   * 给了它就走 ControlMaster 复用：第一条命令建立 master，其余命令骑同一条 TCP
+   * 连接。这是给**引导**那种「十几条短命令」的路径用的；隧道是常驻的长连接，
+   * 它有自己的重连退避，刻意不共用（见 `tunnel.ts`）。
+   */
+  readonly controlPath: string | undefined
   /** 追加的 `-o` 选项；键冲突时以插件自身的安全选项为准。 */
   readonly extraOptions: Readonly<Record<string, string>>
 }
@@ -78,6 +90,17 @@ export function connectionArgv(target: SshTarget, extra: readonly string[] = [])
     '-o', 'LogLevel=ERROR',
     '-o', `ConnectTimeout=${target.connectTimeoutSec}`,
   ]
+  if (target.controlPath !== undefined) {
+    // `auto`：有 master 就骑上去，没有就顺手建一个。它也让**过期的** socket 文件
+    // 不再致命——套接字还在但 master 已经死了时，`ssh` 会退回直连而不是报错。
+    argv.push(
+      '-o', 'ControlMaster=auto',
+      '-o', `ControlPath=${target.controlPath}`,
+      // 空闲 60 秒后 master 自行退出。一次引导的十几条命令集中在几十秒内跑完，
+      // 60 秒足够覆盖整轮，又不留下长期存在的后台进程。
+      '-o', 'ControlPersist=60',
+    )
+  }
   if (target.identityFile !== undefined) {
     argv.push('-o', 'IdentitiesOnly=yes', '-i', target.identityFile)
   }
@@ -108,12 +131,16 @@ export function commandArgv(target: SshTarget, command: string): string[] {
  *
  * `extraOptions` 固定为空：管理动作（引导、预检、观测）不吃隧道专用的那些选项，
  * 两边混在一处时，改隧道参数会悄悄改掉引导行为。
+ *
+ * `controlPath` 则相反——管理路径**默认**复用连接（见 {@link controlPathPattern}），
+ * 因为引导要开十几条短连接。隧道不走这里，它自己拼目标。
  * @param deployment - 部署参数。
  * @param knownHostsFile - 本机专用 `known_hosts`。
  * @param connectTimeoutSec - 连接超时秒数。
  * @returns 可直接交给 {@link commandArgv} 的目标。
  */
 export function adminTarget(deployment: Deployment, knownHostsFile: string, connectTimeoutSec: number): SshTarget {
+  const pattern = controlPathPattern()
   return {
     host: deployment.host,
     port: deployment.sshPort,
@@ -121,8 +148,45 @@ export function adminTarget(deployment: Deployment, knownHostsFile: string, conn
     identityFile: deployment.identityFile,
     knownHostsFile,
     connectTimeoutSec,
+    // 放不下就退回直连。检查放在这里而不是各个调用点：`$DSH_HOME` 很长时这是
+    // 唯一能让「连不上」而不是「复用失败」的地方，漏一处就是全盘连接不可用。
+    controlPath: controlPathFits(pattern) ? pattern : undefined,
     extraOptions: {},
   }
+}
+
+/**
+ * 管理连接的 `ControlPath` 模式。
+ *
+ * 用 `%C` 而不是自己拼 `user@host:port`：`%C` 是「本机、远端、端口、账号」四者的
+ * 短哈希，`ssh` 自己算，因此不同主机、不同账号**不会**撞进同一个 socket。管理账号
+ * 与隧道的 `relay` 账号因此天然分属两个 socket，不需要额外约定；而且哈希里不含
+ * 可读的主机名与账号，套接字文件名落盘时也不泄露连的是谁。
+ *
+ * 它不接 `deployment`：路径与账号无关，隔离交给 `%C`。要参数就得靠调用方记得传，
+ * 而这里根本没有需要它的理由。
+ * @returns 交给 `ControlPath` 的模式字符串。
+ */
+export function controlPathPattern(): string {
+  return `${controlSocketDir()}/%C`
+}
+
+/**
+ * 连接复用的收敛检查：`ControlPath` 是 unix 套接字路径，超过这个长度时 `ssh`
+ * 拒绝启动，而且**是在连上之前**就拒绝，表现为所有连接一起失败。
+ */
+const CONTROL_PATH_LIMIT = 108
+
+/**
+ * 判断 `ControlPath` 展开后是否放得下。
+ *
+ * `%C` 展开成 40 个字符的哈希，所以这里按 40 算。放不下时调用方应当退回不复用，
+ * 而不是让整台机器的连接一起坏掉：复用是优化，直连才是保底。
+ * @param pattern - {@link controlPathPattern} 的返回值（尚未展开 `%C`）。
+ * @returns 放得下时为 true。
+ */
+export function controlPathFits(pattern: string): boolean {
+  return pattern.replace('%C', '0'.repeat(40)).length < CONTROL_PATH_LIMIT
 }
 
 /**

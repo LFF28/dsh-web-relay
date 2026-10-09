@@ -33,6 +33,8 @@
 | 地址栏里出现过 `/relay/enter` 后回到 `/` | 正常：Cookie 在但已失效，中继用一次可见跳转把浏览器送回换票点 | 不用处理；想少一次跳转就清掉该站点数据再打开裸地址 |
 | 手机（Safari）报「发生了太多重定向」 | Safari 不保存 3xx 响应上的 `Set-Cookie`。这一版已经把换票那一跳改成 200 过渡页，所以真遇到它说明中继上跑的还是旧版插件，或者浏览器连 200 上的 Cookie 都存不下 | 先在中继上重新部署一次（换票那一跳应当回 `200` + `x-dsh-web-relay-handshake: transition`，见 [relay-host.md](relay-host.md) 的自检清单）。仍是转圈时插件会在第 6 次停在说明页，按那一页的提示允许该站点使用 Cookie，或换 Chromium/Firefox 打开 |
 | Caddy 返回 502 "隧道未连接" | 内网主机的隧道没起来，或端口不一致 | 内网隧道日志的 `lastExit.message`；再查中继的 `permitlisten` 与 Caddy 上游地址 |
+| 每次部署都停在**不同**的步骤，报 `ssh: connect to host … port 22: Connection timed out` | 到中继的路径丢包。引导原先要开约 12 条独立连接，每条都可能掉，失败点因此随机漂移——不是某一步有缺陷 | 确认连接复用已生效：部署期间 `ss -tn \| grep <vps.host>:22` 应只有一条，且进程 argv 里带 `ControlPath=$DSH_HOME/dsh-web-relay/ssh/cm/%C`。若已复用仍频繁超时，用 `ping -c 20 <vps.host>` 与同期公共地址（如 `223.5.5.5`）对比，判断丢包是否只在这条路径上。详见 [bootstrap.md](bootstrap.md) 的「为什么复用连接」 |
+| 部署报 `ControlPath too long`，或 `unix_listener: cannot bind to path` | 前者是 `$DSH_HOME` 太长、`ControlPath` 展开后 ≥108 字节；后者是套接字目录 `cm/` 不存在 | 前者插件会自动退回直连（功能正常，只是连接变多）；后者本不该出现（启动与每次部署前都会补建 `0700` 的 `ssh/cm`），若出现说明该目录被清理工具删过，手工 `mkdir -p` 后重试 |
 | 隧道日志反复出现 `remote port forwarding failed for listen port 18080` | 端口被残留会话占着（预检本应已清掉），或 `permitlisten` 与 `tunnel.relayPort` 不一致 | 设置页状态区的 `lastPreflight`（`released` 刚清过一次 / `refused` 被占但不是本部署的残留 / `skipped` 预检没跑成）；再查中继 `ss -ltnp \| grep 18080`，以及 `journalctl -u ssh \| grep -iE 'address already in use\|request was denied'` |
 | 隧道日志出现 `Host key verification failed` | 中继换了主机密钥 | 核对云控制台指纹后清空记录的 `observedHostKeyFingerprint` 并重新部署 |
 | 隧道日志出现 `Permission denied (publickey)` | 中继上的 `authorized_keys` 托管块被改过，或引导没跑到第 5 步 | 中继 `/etc/dsh-web-relay/authorized_keys` 与 `/var/log/auth.log` |
@@ -168,6 +170,8 @@ userdel -r relay
 | 重连退避上限 | 30s | 稳定失败时以 30s 周期重试，不刷屏 |
 | 隧道 stderr 保留 | 每进程最后 8 KiB | 只进日志摘要，不落盘 |
 | 单个引导步骤上限 | 120s（`bootstrap.stepTimeoutMs`） | 覆盖 `apt` 安装；超时即判该步失败 |
+| 管理连接的 TCP 连接数 | 1（`ControlMaster=auto` + `%C`） | 原先约 12 条独立握手；路径丢包时整轮成功率因此从约 3% 升到约 75%，见 [bootstrap.md](bootstrap.md) 的「为什么复用连接」 |
+| 管理连接的 master 空闲上限 | 60s（`ControlPersist`） | 空闲后自行退出并删掉套接字；一次引导集中在几十秒内，够覆盖整轮 |
 | 网关会话 Cookie | 12 小时 | "每次进入输一次口令"的节奏由它决定；想少输就调长，想多输就调短 |
 | fail2ban | 5 次 / 10 分钟 → 封 1 小时 | `bantime.increment` 可选 |
 | 会话 Cookie | 30 天（DSH 默认） | 改 `connection` 行的 `cookieMaxAgeDays` 可调整 |

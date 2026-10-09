@@ -187,6 +187,11 @@ export class Tunnel {
       identityFile: this.deps.identityFile,
       knownHostsFile: this.deps.knownHostsFile,
       connectTimeoutSec: this.deps.connectTimeoutSec,
+      // 刻意不复用管理路径的 ControlMaster：隧道是常驻进程，把它挂在一条为
+      // 「十几条短命令」设计的 master 上，会让隧道重连与管理脚本互相牵连——
+      // master 一死，隧道跟着断，而隧道的退避与 `ExitOnForwardFailure` 语义
+      // 都需要它自己独立地管一条连接。
+      controlPath: undefined,
       extraOptions: this.deps.extraOptions,
     }
     const argv = connectionArgv(target, [

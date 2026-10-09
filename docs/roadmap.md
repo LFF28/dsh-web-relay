@@ -40,5 +40,9 @@
 | 杀掉残留的 `sshd` 子进程后端口立刻可用 | 进程退出时内核关闭它的监听 fd；且 sshd 在 `bind` 前设了 `SO_REUSEADDR`（`channels.c` 的 `channel_setup_fwd_listener_tcpip`） | 预检杀完仍绑不上，退避继续空转 | 造一次残留（断开内网主机网络后重启插件，恢复网络再点一次部署），看下一轮的预检是否直接成功 |
 | 转发失败的两种原因只能从中继 `sshd` 日志区分 | 客户端两条路径都收敛成 `SSH2_MSG_REQUEST_FAILURE` | 把配置错当成端口残留，预检反复空跑 | 临时把 `permitlisten` 改成别的端口，观察中继日志出现 `but the request was denied.` |
 | 管理账号的免密 sudo 在非交互调用下成立 | 用户在中继上预先配好；第 3 步用 `sudo -n true` 探测 | 引导停在提权步骤，`sshd` 片段与 Caddyfile 都写不下去 | 中继上跑 `sudo -n true; echo $?`，期望 0；再关掉免密验证它确实报 `a password is required` |
+| `ControlMaster=auto` 能把引导的十几条短命令收敛到一条 TCP 连接，且不改变每条命令的语义（stdin、退出码、输出） | `ssh` 的连接复用把多条会话复用在一条 TCP 上，每条仍是独立 channel | 复用悄悄改掉引导行为（stdin 只送到第一条、退出码不传播），失败模式更难定位 | 用真实库连打 6 条命令，确认只产生 1 个套接字与 1 个 master；远端 `exit 7` 必须让本地退出码也是 7；14 KB 脚本经复用通道执行 1000/1000 行 |
+| 过期的 ControlMaster 套接字文件不会让连接失败 | `ControlMaster=auto` 在 master 已死时退回直连（`yes` 才会直接报错） | 一次 `SIGKILL` 留下的死套接字让之后所有远程命令都失败，表现为"插件彻底坏了" | 在 `ControlPath` 上放一个假文件后连一次，命令仍须成功（退出码 0） |
+| 套接字目录缺失**不会**自动回退，所以必须预先创建 | 实测缺目录时 `ssh` 报 `unix_listener: cannot bind to path …: No such file or directory` 并以 255 退出 | 清理工具删掉 `ssh/cm` 后，所有远程命令一起失败 | `start()` 与每次部署前都 `mkdir -p`（`0700`）；见 [modules/operations.md](modules/operations.md) 的对照表 |
+| `ControlPath` 展开后 ≥108 字节时 `ssh` 拒绝启动，因此需要退回直连 | unix 套接字路径长度上限；`%C` 展开成 40 字符 | `$DSH_HOME` 很长时插件**完全不可用**，而不是仅失去复用 | `adminTarget` 按展开长度检查；`tests/ssh.test.js` 断言 107 字节通过、108 字节拒绝 |
 
 设置页相关的三项（平台模块闭集、`ctx.configForms`、volatile 子树）在打开 设置 ▸ 远程访问 时就会暴露；`internal/config` 校验与记录接口的白名单有单测直接覆盖；其余各项的核对需要一台真实 VPS 与一台运行 `dsh web` 的内网主机，验证过的中继就是这样一组机器。前四项在 profile 启动时就会暴露，后面的项要按 [modules/bootstrap.md](modules/bootstrap.md) 的步骤顺序走完引导。

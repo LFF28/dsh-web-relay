@@ -15,7 +15,7 @@ import { delimiter, dirname, join } from 'node:path'
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 import type { BootstrapStep } from './record.js'
 import type { Deployment } from './deployment.js'
-import { commandArgv, egressAddress, firstLine, parseFingerprints, preferredFingerprint, runSsh, shellQuote, type HostKeyFingerprint, type SshRunResult, type SshTarget } from './ssh.js'
+import { adminTarget, commandArgv, egressAddress, firstLine, parseFingerprints, preferredFingerprint, runSsh, shellQuote, type HostKeyFingerprint, type SshRunResult, type SshTarget } from './ssh.js'
 import { managedBlockScript, readTemplate, substitute, wholeFileScript, type ManagedFile } from './templates.js'
 import type { RelayLogger } from './tunnel.js'
 
@@ -625,15 +625,9 @@ export class Bootstrap {
 
   /** 管理连接的身份。 */
   #target(deployment: Deployment): SshTarget {
-    return {
-      host: deployment.host,
-      port: deployment.sshPort,
-      user: deployment.user,
-      identityFile: deployment.identityFile,
-      knownHostsFile: this.deps.knownHostsFile,
-      connectTimeoutSec: this.deps.connectTimeoutSec,
-      extraOptions: {},
-    }
+    // 走 `adminTarget` 而不是各拼一份：它带上连接复用（引导十几条短命令骑同一条
+    // TCP 连接），并且 `extraOptions` 固定为空。
+    return adminTarget(deployment, this.deps.knownHostsFile, this.deps.connectTimeoutSec)
   }
 
   /**
