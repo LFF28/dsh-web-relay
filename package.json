@@ -1,9 +1,28 @@
 {
   "name": "dsh-web-relay",
   "version": "0.1.0",
-  "private": true,
   "description": "把内网主机上的 dsh web 经一台公网中继交给远程设备：SSH 反向隧道、受限中继账号、网关口令与 DSH 权威注册",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "relay",
+    "reverse-tunnel",
+    "ssh-tunnel",
+    "remote-access",
+    "self-hosted",
+    "caddy"
+  ],
   "license": "MIT",
+  "author": "LFF28 (https://github.com/LFF28)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LFF28/dsh-web-relay.git"
+  },
+  "homepage": "https://github.com/LFF28/dsh-web-relay#readme",
+  "bugs": {
+    "url": "https://github.com/LFF28/dsh-web-relay/issues"
+  },
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -21,10 +40,15 @@
     "cordis.patch.yml",
     "deploy"
   ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.client.json && node scripts/build-client.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json",
     "test": "node --test tests/*.test.js",
+    "prepublishOnly": "pnpm run build",
     "pretest": "pnpm run build"
   },
   "dsh": {
@@ -42,7 +66,7 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/cordis-plugin-loader": "^4.0.2",
+    "@deepseek-ai/cordis-plugin-loader": "^1.0.5",
     "@deepseek-ai/dsh-client-connection": "workspace:*",
     "@deepseek-ai/dsh-client-locale": "workspace:*",
     "@deepseek-ai/dsh-client-ui-settings": "workspace:*",

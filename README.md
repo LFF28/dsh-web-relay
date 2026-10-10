@@ -48,9 +48,19 @@ flowchart LR
 - 该服务器上，管理账号可以公钥登录，并且能免密 `sudo`
 - 本机已装好 DSH，可以正常运行 `dsh web`
 
+从 npm 安装：
+
+```sh
+dsh plugin --profile web add dsh-web-relay
+```
+
+或者从源码安装（`lib/` 不入库，必须先构建）：
+
 ```sh
 git clone https://github.com/LFF28/dsh-web-relay.git
-dsh plugin --profile web add file:$(pwd)/dsh-web-relay
+cd dsh-web-relay
+pnpm install && pnpm run build
+dsh plugin --profile web add file:"$(pwd)"
 ```
 
 重启 `dsh web`，然后在**服务器本机**打开 `http://127.0.0.1:<dshPort>`，进入 **设置 ▸ 远程访问**，填入中继地址、管理账号与网关口令，点「部署」。
