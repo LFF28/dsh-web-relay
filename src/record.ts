@@ -25,7 +25,7 @@ import { relayRoot } from './paths.js'
 
 /** 引导一步的结果。 */
 export interface BootstrapStep {
-  /** 步骤 id，与 `docs/modules/bootstrap.md` 的编号一致。 */
+  /** 步骤 id，与 `docs/internals/bootstrap.md` 的编号一致。 */
   id: string
   /** 步骤标题。 */
   title: string

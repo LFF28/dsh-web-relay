@@ -1,6 +1,6 @@
 # deploy 模板
 
-引导把这里的模板写到中继主机上。模板本身不带逻辑，只有占位符；替换、写入与回滚都由 [../docs/modules/bootstrap.md](../docs/modules/bootstrap.md) 描述的过程完成。
+引导把这里的模板写到中继主机上。模板本身不带逻辑，只有占位符；替换、写入与回滚都由 [../docs/internals/bootstrap.md](../docs/internals/bootstrap.md) 描述的过程完成。
 
 | 模板 | 安装到 | 占位符 |
 | --- | --- | --- |
@@ -18,8 +18,8 @@
 
 `Caddyfile.snippet` 里的全局选项块（`auto_https`、`pki`）在整个 Caddyfile 里只能出现一次。写入前检查块外是否已经声明过，命中就停下并报出那一行。具名片段 `(dsh-relay-upstream)` 的名字同样必须唯一，一并检查。
 
-模板里的两个站点共用 `@@GATEWAY_PORT@@`，具名片段被两个分支各 `import` 一次。改动这份模板时，`header_down Set-Cookie "$" "; Secure"` 那一行是唯一给 DSH 的 Cookie 补 `Secure` 的地方，必须留在 `reverse_proxy` 内：站点级 `header` 不延迟时对代理响应不生效，延迟后又会连 Caddy 自己写的 `relay_session` 一起改写；按 `dsh-auth-` 前缀定点匹配则会在 DSH 调整属性顺序时静默失效。三种写法的实测结论见 [../docs/modules/relay-host.md](../docs/modules/relay-host.md) 第 3 节。
+模板里的两个站点共用 `@@GATEWAY_PORT@@`，具名片段被两个分支各 `import` 一次。改动这份模板时，`header_down Set-Cookie "$" "; Secure"` 那一行是唯一给 DSH 的 Cookie 补 `Secure` 的地方，必须留在 `reverse_proxy` 内：站点级 `header` 不延迟时对代理响应不生效，延迟后又会连 Caddy 自己写的 `relay_session` 一起改写；按 `dsh-auth-` 前缀定点匹配则会在 DSH 调整属性顺序时静默失效。三种写法的结论见 [../docs/internals/relay-host.md](../docs/internals/relay-host.md) 第 3 节。
 
 占位符在替换后不应残留 `@@`：写入完成后回读一次，发现残留按失败处理。
 
-模板改动后按 [../docs/modules/relay-host.md](../docs/modules/relay-host.md) 第 7 节的清单核对，其中"未认证请求不得带 `set-cookie`"、"认证成功的每条 `set-cookie` 都带 `Secure`"与 `intermediate_lifetime` 三项最容易在改动中被破坏。
+模板改动后按 [../docs/internals/relay-host.md](../docs/internals/relay-host.md) 第 7 节的清单核对，其中"未认证请求不得带 `set-cookie`"、"认证成功的每条 `set-cookie` 都带 `Secure`"与 `intermediate_lifetime` 三项最容易在改动中被破坏。

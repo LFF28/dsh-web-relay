@@ -1,7 +1,7 @@
 /**
  * 引导：用管理账号把中继主机配置成一台可用的入口。
  *
- * 覆盖 `docs/modules/bootstrap.md` 的第 0–10 步——从本机工具检查到取回 CA 根证书。
+ * 覆盖 `docs/internals/bootstrap.md` 的第 0–10 步——从本机工具检查到取回 CA 根证书。
  * 第 11–13 步（注册权威、拉起隧道、公网自检）牵涉 DSH 运行期与权威，归
  * `service.ts` 编排，但共用这里定义的步骤目录与 {@link StepLog}。
  *
@@ -19,7 +19,7 @@ import { adminTarget, commandArgv, egressAddress, firstLine, parseFingerprints, 
 import { managedBlockScript, readTemplate, substitute, wholeFileScript, type ManagedFile } from './templates.js'
 import type { RelayLogger } from './tunnel.js'
 
-/** 全部 14 步的编号与标题，与 `docs/modules/bootstrap.md` 的表格逐行对应。 */
+/** 全部 14 步的编号与标题，与 `docs/internals/bootstrap.md` 的表格逐行对应。 */
 export const STEP_TITLES: ReadonlyArray<readonly [string, string]> = [
   ['0', '本地工具检查'],
   ['1', '生成中继密钥对'],
