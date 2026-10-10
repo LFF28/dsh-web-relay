@@ -41,12 +41,12 @@
 
 全部写在带标记的托管块里（`# BEGIN dsh-web-relay` … `# END dsh-web-relay`），**标记之外的内容原样保留**。重新部署时先删旧块再写新块，因此可以反复执行。
 
-| 位置 | 内容 | 作用 |
-| --- | --- | --- |
-| `/home/relay/.ssh/authorized_keys` | 一行公钥，带 `restrict,port-forwarding,permitlisten="127.0.0.1:18080"` | 把这把钥匙的能力锁死为：在 loopback 上开一个转发监听。不能执行命令、不能连别的端口、不能绑到公网接口。 |
-| `/etc/ssh/sshd_config.d/60-dsh-web-relay.conf`（无该目录时写主配置的同名块） | 一个只针对 `relay` 账号的 `Match` 段 | 收紧到只允许反向转发、禁止本地转发与 pty，并设置保活，让异常消失的会话在约 45 秒内被丢弃、释放端口。 |
-| `/etc/caddy/Caddyfile` | 全局选项块 + 一个具名上游片段 + 权威站点 + Host 不匹配的兜底站点 | 公网入口：TLS 终止、网关口令、反向代理、访问日志。写入前先 `caddy fmt` 与 `caddy validate`，校验通过才 reload；不通过就回滚。 |
-| `/etc/fail2ban/filter.d/caddy-dsh-relay.conf` 与 `/etc/fail2ban/jail.d/caddy-dsh-relay.conf` | 网关口令的爆破防护 | 只统计带 `Www-Authenticate` 的口令失败，不把 DSH 自身的 401 计入（否则正常使用会把自己封掉）。这两个文件整体由插件拥有，首行标记不匹配时停下、不覆盖。 |
+| 位置                                                                                          | 内容                                                               | 作用                                                                                         |
+| ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `/home/relay/.ssh/authorized_keys`                                                          | 一行公钥，带 `restrict,port-forwarding,permitlisten="127.0.0.1:18080"` | 把这把钥匙的能力锁死为：在 loopback 上开一个转发监听。不能执行命令、不能连别的端口、不能绑到公网接口。                                   |
+| `/etc/ssh/sshd_config.d/60-dsh-web-relay.conf`（无该目录时写主配置的同名块）                               | 一个只针对 `relay` 账号的 `Match` 段                                      | 收紧到只允许反向转发、禁止本地转发与 pty，并设置保活，让异常消失的会话在约 45 秒内被丢弃、释放端口。                                     |
+| `/etc/caddy/Caddyfile`                                                                      | 全局选项块 + 一个具名上游片段 + 权威站点 + Host 不匹配的兜底站点                          | 公网入口：TLS 终止、网关口令、反向代理、访问日志。写入前先 `caddy fmt` 与 `caddy validate`，校验通过才 reload；不通过就回滚。        |
+| `/etc/fail2ban/filter.d/caddy-dsh-relay.conf` 与 `/etc/fail2ban/jail.d/caddy-dsh-relay.conf` | 网关口令的爆破防护                                                        | 只统计带 `Www-Authenticate` 的口令失败，不把 DSH 自身的 401 计入（否则正常使用会把自己封掉）。这两个文件整体由插件拥有，首行标记不匹配时停下、不覆盖。 |
 
 写入前会检查块外是否已经存在全局选项块、同名片段，或监听同一端口别的站点；命中就停下并报出那一行，让你自己合并。插件不擅自改写别人的全局配置。
 
